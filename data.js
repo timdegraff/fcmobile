@@ -1,58 +1,29 @@
-
-import { getFirestore, doc, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
-import { auth } from './firebase-config.js';
 import { engine, math } from './utils.js';
 import { benefits } from './benefits.js';
 import { burndown } from './burndown.js';
 import { projection } from './projection.js';
 import { PROFILE_45_COUPLE } from './profiles.js';
 
-const db = getFirestore();
 window.currentData = null;
 window.saveTimeout = null;
 
-const DEFAULTS = PROFILE_45_COUPLE;
-
-export async function initializeData(user) {
-    if (user) {
+export async function initializeData() {
+    const local = localStorage.getItem('firecalc_data');
+    if (local) {
         try {
-            const docRef = doc(db, "users", user.uid);
-            const docSnap = await getDoc(docRef);
-            if (docSnap.exists()) {
-                const remoteData = docSnap.data();
-                window.currentData = {
-                    ...JSON.parse(JSON.stringify(DEFAULTS)),
-                    ...remoteData,
-                    assumptions: { ...DEFAULTS.assumptions, ...(remoteData.assumptions || {}) },
-                    budget: { ...DEFAULTS.budget, ...(remoteData.budget || {}) },
-                    benefits: { ...DEFAULTS.benefits, ...(remoteData.benefits || {}) }
-                };
-            } else {
-                window.currentData = JSON.parse(JSON.stringify(DEFAULTS));
-                await setDoc(docRef, window.currentData);
-            }
-        } catch (e) {
-            console.error("Firestore Load Error:", e);
-            window.currentData = JSON.parse(JSON.stringify(DEFAULTS));
-        }
-    } else {
-        const local = localStorage.getItem('firecalc_guest_data');
-        if (local) {
-            try {
-                const parsed = JSON.parse(local);
-                window.currentData = { ...DEFAULTS, ...parsed };
-                if (!window.currentData.assumptions || isNaN(window.currentData.assumptions.currentAge)) {
-                    window.currentData.assumptions = { ...DEFAULTS.assumptions };
-                }
-            } catch(e) {
-                window.currentData = JSON.parse(JSON.stringify(DEFAULTS));
-            }
-        } else {
-            window.currentData = JSON.parse(JSON.stringify(DEFAULTS));
+            window.currentData = JSON.parse(local);
+            loadUserDataIntoUI();
+            refreshAllModules();
+            return true;
+        } catch(e) {
+            console.error("Local Load Error:", e);
+            return false;
         }
     }
+    return false;
+}
 
-    loadUserDataIntoUI();
+export function refreshAllModules() {
     if(window.updateSidebarChart) window.updateSidebarChart(window.currentData);
     if(window.createAssumptionControls) window.createAssumptionControls(window.currentData);
     benefits.load(window.currentData.benefits);
@@ -61,7 +32,7 @@ export async function initializeData(user) {
     updateSummaries();
 }
 
-function loadUserDataIntoUI() {
+export function loadUserDataIntoUI() {
     if (!window.addRow || !window.currentData) return; 
     
     ['investment-rows', 'real-estate-rows', 'other-assets-rows', 'debt-rows', 'heloc-rows', 'budget-savings-rows', 'budget-expenses-rows', 'income-cards', 'stock-option-rows'].forEach(id => {
@@ -147,7 +118,6 @@ function scrapeData() {
             else if (el.dataset.type === 'currency') aObj[key] = math.fromCurrency(el.value);
             else if (el.dataset.type === 'percent') {
                 const val = math.fromCurrency(el.value);
-                // Engine expects growth as whole numbers (8.0) and lifestyle as decimals (1.0)
                 const isMultiplier = ['phaseGo1', 'phaseGo2', 'phaseGo3'].includes(key);
                 aObj[key] = isMultiplier ? val : (val * 100);
             }
@@ -178,7 +148,7 @@ export function forceSyncData() {
 export function autoSave(updateUI = true) {
     if (!window.currentData) return; 
     if (window.saveTimeout) clearTimeout(window.saveTimeout);
-    window.saveTimeout = setTimeout(async () => {
+    window.saveTimeout = setTimeout(() => {
         const newData = scrapeData();
         if (!newData) return;
         window.currentData = newData; 
@@ -188,16 +158,8 @@ export function autoSave(updateUI = true) {
             if(window.updateSidebarChart) window.updateSidebarChart(newData);
         }
 
-        const user = auth.currentUser;
-        if (user) {
-            try {
-                await setDoc(doc(db, "users", user.uid), newData);
-                showSaveIndicator();
-            } catch (e) { console.error("Save Error", e); }
-        } else if (localStorage.getItem('firecalc_guest_mode') === 'true') {
-            localStorage.setItem('firecalc_guest_data', JSON.stringify(newData));
-            showSaveIndicator(); 
-        }
+        localStorage.setItem('firecalc_data', JSON.stringify(newData));
+        showSaveIndicator();
     }, 1000);
 }
 
@@ -206,11 +168,8 @@ window.debouncedAutoSave = () => autoSave(true);
 function showSaveIndicator() {
     const el = document.getElementById('save-indicator');
     if (!el) return;
-    // Highlight the cloud icon green for 100ms
     el.classList.add('text-emerald-400');
-    setTimeout(() => {
-        el.classList.remove('text-emerald-400');
-    }, 100);
+    setTimeout(() => el.classList.remove('text-emerald-400'), 100);
 }
 
 export function updateSummaries() {
@@ -239,42 +198,11 @@ export function updateSummaries() {
     const currentYear = new Date().getFullYear();
 
     const yrsToRetire = Math.max(0, retirementAge - currentAge);
-    const retireYear = currentYear + yrsToRetire;
     set('sum-yrs-to-retire', yrsToRetire, false);
     set('sum-life-exp', engine.getLifeExpectancy(currentAge) + currentAge, false);
 
     const infFacRet = Math.pow(1 + inflation, yrsToRetire);
-    
-    // UPDATED: Correctly subtract expenses for retirement income summary
-    const streamsAtRet = (data.income || []).filter(i => i.remainsInRetirement).reduce((sum, inc) => {
-        const growth = (parseFloat(inc.increase) / 100) || 0;
-        const gross = (math.fromCurrency(inc.amount) * (inc.isMonthly === true || inc.isMonthly === 'true' ? 12 : 1) * Math.pow(1 + growth, yrsToRetire));
-        const exp = (math.fromCurrency(inc.incomeExpenses) * (inc.incomeExpensesMonthly === true || inc.incomeExpensesMonthly === 'true' ? 12 : 1));
-        return sum + (gross - exp);
-    }, 0);
-
     const ssAtRet = (retirementAge >= ssStartAge) ? engine.calculateSocialSecurity(data.assumptions?.ssMonthly || 0, data.assumptions?.workYearsAtRetirement || 35, infFacRet) : 0;
-    const totalNominalFloor = streamsAtRet + ssAtRet;
-    set('sum-retirement-income-floor', totalNominalFloor);
-
-    const incTitleEl = document.getElementById('label-retirement-income-title');
-    if (incTitleEl) incTitleEl.textContent = `Retirement Income in ${retireYear}`;
-    const incSubEl = document.getElementById('sum-retirement-income-sub');
-    if (incSubEl) incSubEl.textContent = `${math.toCurrency(totalNominalFloor / infFacRet)} in 2026 Dollars`;
-
-    let totalRealRetireBudget = 0;
-    const totalNominalRetireBudget = (data.budget?.expenses || []).reduce((sum, exp) => {
-        if (exp.remainsInRetirement === false) return sum;
-        const base = math.fromCurrency(exp.annual);
-        totalRealRetireBudget += base;
-        return sum + (exp.isFixed ? base : base * infFacRet);
-    }, 0);
-
-    const budTitleEl = document.getElementById('label-retirement-budget-title');
-    if (budTitleEl) budTitleEl.textContent = `Retirement Budget in ${retireYear}`;
-    set('sum-budget-total', totalNominalRetireBudget); 
-    const budSubEl = document.getElementById('sum-retirement-budget-sub');
-    if (budSubEl) budSubEl.textContent = `${math.toCurrency(totalNominalRetireBudget / infFacRet)} in 2026 Dollars`;
-
-    set('sum-retire-budget', totalNominalRetireBudget);
+    set('sum-retirement-income-floor', ssAtRet);
+    set('sum-retire-budget', (data.budget?.expenses || []).reduce((s, e) => s + math.fromCurrency(e.annual) * (e.isFixed ? 1 : infFacRet), 0));
 }
