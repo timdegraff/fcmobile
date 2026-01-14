@@ -397,7 +397,7 @@ export const burndown = {
                     </div>
                     <div class="text-right">
                         <span class="text-slate-500 uppercase tracking-widest text-[9px]">End Balance NW:</span>
-                        <span class="ml-2 font-black text-teal-400 text-sm">${fmt(cycle.netWorth)}</span>
+                        <span class="ml-2 font-black text-teal-400 text-sm">${math.toSmartCompactCurrency(cycle.netWorth)}</span>
                     </div>
                 </div>
             </div>
@@ -546,17 +546,18 @@ export const burndown = {
                         for (const pk of ['taxable', 'crypto', 'metals']) {
                             // Check gap before opportunistic MAGI drawing to prevent account emptying
                             const currentNetPre = (floorGross + preTaxDraw + snap) - taxes;
-                            if (targetBudget - currentNetPre <= 10) break;
+                            const budgetGap = targetBudget - currentNetPre;
+                            if (budgetGap <= 10) break;
 
                             let curMAGI = floorTaxable + curOrdDraw + curLtcgDraw;
                             if (curMAGI >= magiLimit) break;
                             let bR = bal[pk] > 0 ? bal[pk+'Basis'] / bal[pk] : 1;
                             
                             // Don't draw more than needed to hit MAGI limit OR close the budget gap
-                            let pull = Math.min(bal[pk], (magiLimit - curMAGI) / (1 - bR));
-                            // Also constrain pull by approximate budget gap to avoid emptying account
-                            const roughNetCap = (targetBudget - currentNetPre) / 0.85; 
-                            pull = Math.min(pull, roughNetCap);
+                            let pullAllowedByMAGI = (magiLimit - curMAGI) / (1 - bR);
+                            let pullNeededForGap = budgetGap / 0.98; // Very close net-to-gross for these assets
+
+                            let pull = Math.min(bal[pk], pullAllowedByMAGI, pullNeededForGap);
 
                             if (pull > 1) {
                                 bal[pk] -= pull; bal[pk+'Basis'] -= (bal[pk+'Basis'] * (pull / (bal[pk]+pull)));
@@ -576,6 +577,14 @@ export const burndown = {
             }
 
             const postTaxInc = (floorGross + preTaxDraw + snap) - taxes;
+
+            // --- Error Check ---
+            if (isRet && status !== 'INSOLVENT' && status !== 'ERROR') {
+                const diff = Math.abs(postTaxInc - targetBudget);
+                if (diff > (targetBudget * 0.01)) {
+                    status = 'ERROR';
+                }
+            }
             
             const reGrowth = Math.pow(1 + (assumptions.realEstateGrowth / 100), i);
             const oaGrowth = Math.pow(1 + 0.02, i);
@@ -659,7 +668,7 @@ export const burndown = {
                     <div class="text-slate-600 text-[7px] font-bold">${formatVal(r.balances[k] || 0)}</div>
                 </td>`).join('')}
                 <td class="p-2 text-center font-black text-white">${formatVal(r.postTaxInc)}</td>
-                <td class="p-2 text-center font-black text-teal-400 bg-teal-400/5">${formatVal(r.netWorth)}</td>
+                <td class="p-2 text-center font-black text-teal-400 bg-teal-400/5">${math.toSmartCompactCurrency(r.netWorth / inf)}</td>
             </tr>`;
         }).join('');
         return `<table class="w-full text-left border-collapse table-auto">${header}<tbody>${rows}</tbody></table>`;

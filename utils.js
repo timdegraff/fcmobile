@@ -204,6 +204,9 @@ export const math = {
     toSmartCompactCurrency: (val) => {
         const absVal = Math.abs(val);
         const prefix = val < 0 ? '-' : '';
+        if (absVal >= 1000000) {
+            return prefix + '$' + (absVal / 1000000).toFixed(2) + 'M';
+        }
         if (absVal >= 1000) {
             return prefix + '$' + Math.round(absVal / 1000) + 'K';
         }
