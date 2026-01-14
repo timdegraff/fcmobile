@@ -242,5 +242,9 @@ export function updateSummaries() {
         return s + math.fromCurrency(s_item.annual) * (s_item.isFixed ? 1 : infFacRet);
     }, 0);
 
-    set('sum-retire-budget', retireExp + retireSav);
+    const retireTotal = retireExp + retireSav;
+    set('sum-retire-budget', retireTotal);
+    
+    const retireTotalReal = retireTotal / infFacRet;
+    set('sum-retire-budget-real', `${math.toCurrency(retireTotalReal)} IN 2026 DOLLARS`, false);
 }

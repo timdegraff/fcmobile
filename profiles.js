@@ -59,7 +59,7 @@ export const BLANK_PROFILE = {
             { name: 'ELECTRIC', monthly: 200, annual: 2400, remainsInRetirement: true, isFixed: false },
             { name: 'KID STUFF', monthly: 200, annual: 2400, remainsInRetirement: true, isFixed: false },
             { name: 'VERIZON', monthly: 191, annual: 2292, remainsInRetirement: true, isFixed: false },
-            { name: 'MEDICAL', monthly: 185, annual: 2220, remainsInRetirement: true, isFixed: false },
+            { name: 'MEDICAL', monthly: 185, annual: 2220, remainsInRetirement: false, isFixed: false },
             { name: 'HOMESCHOOL + SUNDROP', monthly: 175, annual: 2100, remainsInRetirement: true, isFixed: false },
             { name: 'CAR + RV INSURANCE', monthly: 153, annual: 1836, remainsInRetirement: true, isFixed: false },
             { name: 'STARLINK', monthly: 125, annual: 1500, remainsInRetirement: true, isFixed: false },

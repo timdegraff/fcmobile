@@ -286,6 +286,22 @@ export const burndown = {
         }
 
         const config = burndown.scrape();
+        
+        // Update Food Aid Target (MAX) assuming MAGI is $0
+        const ben = data.benefits || {};
+        const filingStatus = data.assumptions?.filingStatus || 'Single';
+        const adults = filingStatus === 'Married Filing Jointly' ? 2 : 1;
+        const currentYear = new Date().getFullYear();
+        const effectiveKidsCount = (ben.dependents || []).filter(d => (d.birthYear + 19) >= currentYear).length;
+        const totalSize = adults + effectiveKidsCount;
+        
+        const maxSnapPossible = engine.calculateSnapBenefit(0, 0, 0, totalSize, ben.shelterCosts || 700, ben.hasSUA ?? true, ben.isDisabled ?? false, ben.childSupportPaid || 0, ben.depCare || 0, ben.medicalExps || 0, data.assumptions?.state || 'Michigan', 1, true);
+        
+        const snapIndicator = document.getElementById('est-snap-indicator');
+        if (snapIndicator) {
+            snapIndicator.textContent = math.toCurrency(maxSnapPossible);
+        }
+
         fullSimulationResults = burndown.simulateProjection(data, config);
         
         if (document.getElementById('card-runway-val')) document.getElementById('card-runway-val').textContent = firstInsolvencyAge ? firstInsolvencyAge : "100+";
@@ -366,6 +382,7 @@ export const burndown = {
     simulateProjection: (data, config) => {
         const { assumptions, investments = [], income = [], budget = {}, benefits = {}, helocs = [], realEstate = [], otherAssets = [], debts = [], stockOptions = [] } = data;
         const inflationRate = (assumptions.inflation || 3) / 100, filingStatus = assumptions.filingStatus || 'Single', persona = config.strategyMode, rAge = parseFloat(assumptions.retirementAge) || 65, cashFloor = config.cashReserve;
+        const ssStartAge = parseFloat(assumptions.ssStartAge) || 67, ssMonthly = parseFloat(assumptions.ssMonthly) || 0, workYears = parseFloat(assumptions.workYearsAtRetirement) || 35;
         firstInsolvencyAge = null;
         
         const summaries = engine.calculateSummaries(data);
@@ -404,18 +421,30 @@ export const burndown = {
             let floorGross = 0, floorTaxable = 0;
             if (!isRet) {
                 income.forEach(inc => {
-                    let gross = math.fromCurrency(inc.amount) * (inc.isMonthly ? 12 : 1) * Math.pow(1 + (inc.increase / 100 || 0), i);
-                    let netSrc = gross - (math.fromCurrency(inc.incomeExpenses) * (inc.incomeExpensesMonthly ? 12 : 1));
+                    const isMon = inc.isMonthly === true || inc.isMonthly === 'true';
+                    let gross = math.fromCurrency(inc.amount) * (isMon ? 12 : 1) * Math.pow(1 + (inc.increase / 100 || 0), i);
+                    const isExpMon = inc.incomeExpensesMonthly === true || inc.incomeExpensesMonthly === 'true';
+                    let netSrc = gross - (math.fromCurrency(inc.incomeExpenses) * (isExpMon ? 12 : 1));
                     if (isNaN(parseInt(inc.nonTaxableUntil)) || year >= inc.nonTaxableUntil) floorTaxable += netSrc;
                     floorGross += netSrc;
                 });
             } else {
                 income.filter(inc => inc.remainsInRetirement).forEach(inc => {
-                    let gross = math.fromCurrency(inc.amount) * (inc.isMonthly ? 12 : 1) * Math.pow(1 + (inc.increase / 100 || 0), i);
-                    let netSrc = gross - (math.fromCurrency(inc.incomeExpenses) * (inc.incomeExpensesMonthly ? 12 : 1));
+                    const isMon = inc.isMonthly === true || inc.isMonthly === 'true';
+                    let gross = math.fromCurrency(inc.amount) * (isMon ? 12 : 1) * Math.pow(1 + (inc.increase / 100 || 0), i);
+                    const isExpMon = inc.incomeExpensesMonthly === true || inc.incomeExpensesMonthly === 'true';
+                    let netSrc = gross - (math.fromCurrency(inc.incomeExpenses) * (isExpMon ? 12 : 1));
                     if (isNaN(parseInt(inc.nonTaxableUntil)) || year >= inc.nonTaxableUntil) floorTaxable += netSrc;
                     floorGross += netSrc;
                 });
+                
+                // Add Social Security if age >= ssStartAge
+                if (age >= ssStartAge) {
+                    const ssFull = engine.calculateSocialSecurity(ssMonthly, workYears, infFac);
+                    const taxableSS = engine.calculateTaxableSocialSecurity(ssFull, floorTaxable, filingStatus);
+                    floorGross += ssFull;
+                    floorTaxable += taxableSS;
+                }
             }
 
             const startOfYearBal = { ...bal };
@@ -549,9 +578,11 @@ export const burndown = {
             <th class="p-2 w-10 text-center !bg-[#1e293b]">Age</th>
             <th class="p-2 text-center !bg-[#1e293b]">Budget</th>
             <th class="p-2 text-center !bg-[#1e293b]">Status</th>
-            <th class="p-2 text-center !bg-[#1e293b]">Pre-Tax Draw</th>
+            <th class="p-2 text-center !bg-[#1e293b] text-teal-400">Cashflow</th>
+            <th class="p-2 text-center !bg-[#1e293b] text-emerald-500">Aid</th>
+            <th class="p-2 text-center !bg-[#1e293b] text-orange-400">Gap</th>
+            <th class="p-2 text-center !bg-[#1e293b]">Gross Draw</th>
             <th class="p-2 text-center !bg-[#1e293b]">Tax Paid</th>
-            <th class="p-2 text-center !bg-[#1e293b]">SNAP</th>
             ${columns.map(k => `<th class="p-2 text-center !bg-[#1e293b] text-[7px]" style="color:${burndown.assetMeta[k].color}">${burndown.assetMeta[k].short}</th>`).join('')}
             <th class="p-2 text-center !bg-[#1e293b] text-teal-400">Post-Tax Inc</th>
             <th class="p-2 text-center !bg-[#1e293b]">Net Worth</th>
@@ -562,6 +593,8 @@ export const burndown = {
             const formatVal = (v) => math.toSmartCompactCurrency(v / inf);
             let badgeClass = r.status === 'INSOLVENT' || r.status === 'ERROR' ? 'bg-red-600 text-white' : (r.status === 'Platinum' ? 'bg-emerald-500 text-white' : (r.status === 'Active' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-400'));
             
+            const assetGap = Math.max(0, r.budget - r.floorGross - r.snap);
+
             return `<tr class="border-b border-white/5 hover:bg-white/5 text-[9px] ${r.status === 'ERROR' ? 'bg-red-900/10' : ''}">
                 <td class="p-2 text-center font-bold">${r.age}</td>
                 <td class="p-2 text-center">
@@ -570,9 +603,11 @@ export const burndown = {
                     ${r.helocInt > 10 ? `<div class="text-[7px] font-black text-orange-400 uppercase leading-none mt-0.5">+${formatVal(r.helocInt)} HELOC INT</div>` : ''}
                 </td>
                 <td class="p-2 text-center"><span class="px-2 py-0.5 rounded-[4px] text-[7px] font-black uppercase tracking-wider ${badgeClass}">${r.status}</span></td>
+                <td class="p-2 text-center text-teal-400 font-bold">${formatVal(r.floorGross)}</td>
+                <td class="p-2 text-center text-emerald-500 font-bold">${formatVal(r.snap)}</td>
+                <td class="p-2 text-center text-orange-400 font-black">${formatVal(assetGap)}</td>
                 <td class="p-2 text-center text-white font-bold">${formatVal(r.preTaxDraw)}</td>
                 <td class="p-2 text-center text-red-400 font-bold">${formatVal(r.taxes)}</td>
-                <td class="p-2 text-center text-emerald-500 font-bold">${formatVal(r.snap)}</td>
                 ${columns.map(k => `<td class="p-1.5 text-center leading-tight">
                     <div class="font-black" style="color: ${r.draws[k] > 0 ? burndown.assetMeta[k].color : '#475569'}">${r.draws[k] > 1 ? formatVal(r.draws[k]) : '$0'}</div>
                     <div class="text-slate-600 text-[7px] font-bold">${formatVal(r.balances[k] || 0)}</div>

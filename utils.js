@@ -356,7 +356,7 @@ export const engine = {
         let irsLimit = 23500;
         if (age >= 60 && age <= 63) irsLimit = 34750;
         else if (age >= 50) irsLimit = 31000;
-        let total401kContribution = 0, totalGrossInflow = 0, totalNetSource = 0, currentYearMagi = 0;
+        let total401kContribution = 0, totalNetSource = 0, currentYearMagi = 0;
         const currentYear = new Date().getFullYear();
         inc.forEach(x => {
             const isMon = x.isMonthly === true || x.isMonthly === 'true';
@@ -369,7 +369,7 @@ export const engine = {
             total401kContribution += cappedIndividual401k;
             const isExpMon = x.incomeExpensesMonthly === true || x.incomeExpensesMonthly === 'true';
             const sourceExpenses = (math.fromCurrency(x.incomeExpenses) * (isExpMon ? 12 : 1));
-            totalGrossInflow += sourceGross;
+            // User request: Deduction removes income from them. So we return the net of the source as "Gross Income".
             totalNetSource += (sourceGross - sourceExpenses); 
             
             const taxableYear = parseInt(x.nonTaxableUntil);
@@ -382,7 +382,7 @@ export const engine = {
         return { 
             netWorth: totalAssets - totalLiabilities, 
             totalAssets, totalLiabilities, 
-            totalGrossIncome: totalGrossInflow, 
+            totalGrossIncome: totalNetSource, // Now reflects deduction removal per user request
             magiBase: Math.max(0, currentYearMagi - hsaSavings), 
             total401kContribution, 
             totalAnnualSavings: manualSavingsSum + total401kContribution + hsaSavings, 
