@@ -79,8 +79,13 @@
     <div id="app-container" class="hidden flex h-screen overflow-hidden relative">
         <aside class="sidebar w-64 flex flex-col flex-shrink-0 bg-[#0B0F19]/80 backdrop-blur-xl border-r border-white/5 z-20">
             <div class="p-6 pb-2">
-                <h1 class="text-xl font-black text-white tracking-tight">FIRECalc</h1>
-                <p class="label-std text-slate-500">Local Only Storage</p>
+                <div class="flex items-center justify-between">
+                    <h1 class="text-xl font-black text-white tracking-tight">FIRECalc</h1>
+                    <a href="https://buymeacoffee.com/timdegraff" target="_blank" class="flex items-center gap-1.5 text-[8px] font-black text-orange-400 hover:text-orange-300 transition-colors uppercase tracking-widest">
+                        Donate: <i class="fas fa-coffee"></i>
+                    </a>
+                </div>
+                <p class="label-std text-slate-500">Retirement Engine</p>
             </div>
             
             <nav class="flex-grow px-3 py-2 space-y-1 overflow-y-auto" id="main-nav">
@@ -97,7 +102,7 @@
                 <div class="mb-4">
                     <p class="label-std text-slate-500 mb-2">Net Worth</p>
                     <p id="sidebar-networth" class="text-xl font-black text-teal-400 tracking-tight mono-numbers">$0</p>
-                    <div id="sidebar-asset-legend" class="mt-4 grid grid-cols-2 gap-x-3 gap-y-2.5"></div>
+                    <div id="sidebar-asset-legend" class="mt-4 grid grid-cols-2 gap-x-3 gap-y-1.5"></div>
                 </div>
                 <div id="user-name" class="font-bold text-slate-300 text-[11px] truncate mb-3">Local User</div>
                 <div class="flex gap-2">
@@ -233,11 +238,11 @@
                         </div>
                     </div>
 
-                    <!-- Private Equity / Stock Options (MOVED TO BOTTOM) -->
+                    <!-- Private Equity / Stock Options -->
                     <div>
                         <div class="flex justify-between items-end mb-6 px-1">
                             <h2 class="text-xl font-bold text-white tracking-tight">Private Equity & Options</h2>
-                            <button data-add-row="stock-option-rows" data-row-type="stockOption" class="px-4 py-2 bg-orange-600 hover:bg-orange-500 text-white rounded-lg text-xs font-bold transition-all shadow-lg shadow-orange-900/20"><i class="fas fa-plus mr-2"></i>Add Grant</button>
+                            <button data-add-row="stock-option-rows" data-row-type="stockOption" class="w-8 h-8 bg-blue-600 hover:bg-blue-500 text-white rounded-lg flex items-center justify-center transition-all shadow-lg shadow-blue-900/20"><i class="fas fa-plus text-xs"></i></button>
                         </div>
                         <div class="card-container overflow-hidden">
                             <table class="w-full text-xs">
@@ -423,6 +428,28 @@
             <!-- BURNDOWN TAB -->
             <section id="tab-burndown" class="tab-content hidden max-w-7xl mx-auto">
                 <div id="burndown-view-container" class="mb-12"></div>
+                
+                <!-- ADVANCED LOGIC TRACE -->
+                <div class="mt-8">
+                    <div class="flex items-center justify-between mb-4 px-1">
+                        <div class="flex items-center gap-4">
+                            <div class="w-10 h-10 rounded-xl bg-blue-500/20 flex items-center justify-center text-blue-400">
+                                <i class="fas fa-terminal text-sm"></i>
+                            </div>
+                            <div>
+                                <h2 class="text-xl font-bold text-white tracking-tight uppercase tracking-tighter">Advanced Logic Trace</h2>
+                                <p class="text-[8px] text-slate-500 font-bold uppercase tracking-widest mt-0.5">Deep-dive into the decumulation math</p>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-3 bg-slate-900/50 p-2 rounded-xl border border-white/5">
+                            <span class="text-[9px] font-black text-slate-500 uppercase tracking-widest">Inspect Year</span>
+                            <input type="number" id="input-trace-year" class="input-base w-20 text-center text-blue-400 font-black mono-numbers h-8" value="2027">
+                        </div>
+                    </div>
+                    <div id="logic-trace-container" class="card-container p-6 bg-black/40 font-mono text-xs text-slate-400 legacy-scrollbar leading-relaxed overflow-x-auto min-h-[300px]">
+                        <div class="flex items-center justify-center h-full text-slate-600 italic">Enter a year to see the step-by-step logic trace for that period.</div>
+                    </div>
+                </div>
             </section>
         </main>
     </div>

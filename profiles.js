@@ -32,15 +32,15 @@ export const BLANK_PROFILE = {
     ],
     income: [
         { name: 'GM SALARY', amount: 186561, increase: 3.5, contribution: 12.5, match: 10, bonusPct: 23, isMonthly: false, incomeExpenses: 0, remainsInRetirement: false, contribOnBonus: false, matchOnBonus: false },
-        { name: 'CELL TOWER', amount: 1200, increase: 1.5, contribution: 0, match: 0, bonusPct: 0, isMonthly: true, incomeExpenses: 0, remainsInRetirement: false, contribOnBonus: false, matchOnBonus: false },
-        { name: '11475 RENTAL', amount: 1575, increase: 3, contribution: 0, match: 0, bonusPct: 0, isMonthly: true, incomeExpenses: 450, incomeExpensesMonthly: true, remainsInRetirement: false, contribOnBonus: false, matchOnBonus: false }
+        { name: 'CELL TOWER', amount: 1200, increase: 1.5, contribution: 0, match: 0, bonusPct: 0, isMonthly: true, incomeExpenses: 0, remainsInRetirement: true, contribOnBonus: false, matchOnBonus: false },
+        { name: '11475 RENTAL', amount: 1575, increase: 3, contribution: 0, match: 0, bonusPct: 0, isMonthly: true, incomeExpenses: 450, incomeExpensesMonthly: true, remainsInRetirement: true, contribOnBonus: false, matchOnBonus: false }
     ],
     budget: {
         savings: [
-            { type: 'HSA', monthly: 604, annual: 7250, removedInRetirement: true },
-            { type: '529', monthly: 400, annual: 4800, removedInRetirement: true },
-            { type: 'Metals', monthly: 750, annual: 9000, removedInRetirement: true },
-            { type: 'Taxable', monthly: 833, annual: 10000, removedInRetirement: true }
+            { type: 'HSA', monthly: 604, annual: 7250, remainsInRetirement: false },
+            { type: '529', monthly: 400, annual: 4800, remainsInRetirement: false },
+            { type: 'Metals', monthly: 750, annual: 9000, remainsInRetirement: false },
+            { type: 'Taxable', monthly: 833, annual: 10000, remainsInRetirement: false }
         ],
         expenses: [
             { name: 'MORTGAGE', monthly: 1417, annual: 17004, remainsInRetirement: true, isFixed: true },
@@ -124,8 +124,8 @@ export const PROFILE_45_COUPLE = {
     ],
     budget: {
         savings: [
-            { type: 'Taxable', annual: 36000, monthly: 3000, removedInRetirement: true },
-            { type: 'HSA', annual: 7200, monthly: 600, removedInRetirement: true }
+            { type: 'Taxable', annual: 36000, monthly: 3000, remainsInRetirement: false },
+            { type: 'HSA', annual: 7200, monthly: 600, remainsInRetirement: false }
         ],
         expenses: [
             { name: 'MORTGAGE W/ ESCROW', annual: 33000, monthly: 2750, remainsInRetirement: true, isFixed: true },
@@ -184,8 +184,8 @@ export const PROFILE_25_SINGLE = {
     ],
     budget: {
         savings: [
-            { type: 'Roth IRA', annual: 7000, monthly: 583, removedInRetirement: true },
-            { type: 'HSA', annual: 4150, monthly: 346, removedInRetirement: true }
+            { type: 'Roth IRA', annual: 7000, monthly: 583, remainsInRetirement: false },
+            { type: 'HSA', annual: 4150, monthly: 346, remainsInRetirement: false }
         ],
         expenses: [
             { name: 'Rent (NY)', annual: 24000, monthly: 2000, remainsInRetirement: true, isFixed: false },
@@ -203,7 +203,7 @@ export const PROFILE_25_SINGLE = {
         currentAge: 25, retirementAge: 50, ssStartAge: 62, ssMonthly: 2800, 
         stockGrowth: 9, cryptoGrowth: 8, metalsGrowth: 6, realEstateGrowth: 3.5, 
         inflation: 3, filingStatus: 'Single', 
-        helocRate: 6.5, state: 'New York', workYearsAtRetirement: 25,
+        helocRate: 6.5, state: 'Michigan', workYearsAtRetirement: 25,
         phaseGo1: 1.0, phaseGo2: 0.9, phaseGo3: 0.8,
         advancedGrowth: false,
         ltcgRate: 15
@@ -234,8 +234,8 @@ export const PROFILE_55_RETIREE = {
     ],
     budget: {
         savings: [
-            { type: 'Taxable', annual: 60000, monthly: 5000, removedInRetirement: true },
-            { type: 'Pre-Tax (401k/IRA)', annual: 30500, monthly: 2541, removedInRetirement: true } 
+            { type: 'Taxable', annual: 60000, monthly: 5000, remainsInRetirement: false },
+            { type: 'Pre-Tax (401k/IRA)', annual: 30500, monthly: 2541, remainsInRetirement: false } 
         ],
         expenses: [
             { name: 'Living Expenses', annual: 72000, monthly: 6000, remainsInRetirement: true, isFixed: false },

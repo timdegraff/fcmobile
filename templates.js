@@ -204,9 +204,9 @@ export const templates = {
             </td>
             <td class="text-center">
                  ${data.isLocked ? '' : `
-                 <label class="inline-flex items-center px-3 py-1 bg-black/20 rounded-lg border border-white/5 cursor-pointer hover:border-pink-500/50 transition-all group" title="Contribution stops when you retire">
-                    <span class="text-[9px] uppercase font-black text-slate-500 mr-2 group-hover:text-pink-400">No</span>
-                    <input type="checkbox" data-id="removedInRetirement" class="w-3 h-3 accent-pink-500 rounded bg-slate-900 border-slate-700" ${data.removedInRetirement ? 'checked' : ''}>
+                 <label class="inline-flex items-center px-3 py-1 bg-black/20 rounded-lg border border-white/5 cursor-pointer hover:border-emerald-500/50 transition-all group" title="Persists in Retirement">
+                    <span class="text-[9px] uppercase font-black text-slate-500 mr-2 group-hover:text-emerald-400">Yes?</span>
+                    <input type="checkbox" data-id="remainsInRetirement" class="w-3 h-3 accent-emerald-500 rounded bg-slate-900 border-slate-700" ${data.remainsInRetirement ? 'checked' : ''}>
                 </label>
                  `}
             </td>

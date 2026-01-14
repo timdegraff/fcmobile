@@ -30,7 +30,14 @@ window.addRow = (containerId, type, data = {}) => {
     }
     
     if (data.isLocked) element.classList.add('locked-row');
-    if (type === 'budget-savings' && data.removedInRetirement === undefined) data.removedInRetirement = true; 
+    if (type === 'budget-savings' && data.remainsInRetirement === undefined) {
+        // If coming from old data that used removedInRetirement
+        if (data.removedInRetirement !== undefined) {
+            data.remainsInRetirement = !data.removedInRetirement;
+        } else {
+            data.remainsInRetirement = false; 
+        }
+    }
     if (type === 'budget-savings' || type === 'budget-expense') {
         if (data.annual !== undefined && data.monthly === undefined) data.monthly = data.annual / 12;
         else if (data.monthly !== undefined && data.annual === undefined) data.annual = data.monthly * 12;
@@ -60,12 +67,18 @@ window.addRow = (containerId, type, data = {}) => {
     element.querySelectorAll('input[type="number"]').forEach(formatter.bindNumberEventListeners);
 
     if (type === 'stockOption') {
-        const shares = parseFloat(element.querySelector('[data-id="shares"]')?.value) || 0;
-        const strike = math.fromCurrency(element.querySelector('[data-id="strikePrice"]')?.value || "0");
-        const fmv = math.fromCurrency(element.querySelector('[data-id="currentPrice"]')?.value || "0");
-        const equity = Math.max(0, (fmv - strike) * shares);
-        const display = element.querySelector('[data-id="netEquityDisplay"]');
-        if (display) display.textContent = math.toCurrency(equity);
+        const updatePE = () => {
+            const shares = parseFloat(element.querySelector('[data-id="shares"]')?.value) || 0;
+            const strike = math.fromCurrency(element.querySelector('[data-id="strikePrice"]')?.value || "0");
+            const fmv = math.fromCurrency(element.querySelector('[data-id="currentPrice"]')?.value || "0");
+            const equity = Math.max(0, (fmv - strike) * shares);
+            const display = element.querySelector('[data-id="netEquityDisplay"]');
+            if (display) display.textContent = math.toCurrency(equity);
+            // Trigger a summary update to sync sidebar
+            if (window.debouncedAutoSave) window.debouncedAutoSave();
+        };
+        updatePE();
+        element.querySelectorAll('input').forEach(i => i.addEventListener('input', updatePE));
     }
 
     if (type === 'income') {
@@ -344,23 +357,42 @@ window.updateSidebarChart = (data) => {
         const v = math.fromCurrency(i.value); 
         if (v !== 0) totals[i.type] = (totals[i.type] || 0) + v; 
     });
+    
+    // Private Equity inclusion
+    const optionsEquity = data.stockOptions?.reduce((s, x) => {
+        const shares = parseFloat(x.shares) || 0;
+        const strike = math.fromCurrency(x.strikePrice);
+        const fmv = math.fromCurrency(x.currentPrice);
+        return s + Math.max(0, (fmv - strike) * shares);
+    }, 0) || 0;
+    if (optionsEquity !== 0) totals['Stock Options'] = optionsEquity;
+
     const reEquity = data.realEstate?.reduce((s, r) => s + (math.fromCurrency(r.value) - math.fromCurrency(r.mortgage)), 0) || 0;
     if (reEquity !== 0) totals['Real Estate'] = reEquity;
+    
     const oaEquity = data.otherAssets?.reduce((s, o) => s + (math.fromCurrency(o.value) - math.fromCurrency(o.loan)), 0) || 0;
     if (oaEquity !== 0) totals['Other'] = oaEquity;
+    
     const helocTotal = data.helocs?.reduce((s, h) => s + math.fromCurrency(h.balance), 0) || 0;
     if (helocTotal !== 0) totals['HELOC'] = -helocTotal;
+    
     const debtTotal = data.debts?.reduce((s, d) => s + math.fromCurrency(d.balance), 0) || 0;
     if (debtTotal !== 0) totals['Debt'] = -debtTotal;
+    
     const legendContainer = document.getElementById('sidebar-asset-legend');
     if (legendContainer) {
         legendContainer.innerHTML = '';
-        const abbrev = { 'Pre-Tax (401k/IRA)': 'Pre-Tax', 'Stock Options': 'Stock Ops', 'Roth IRA': 'Roth' };
+        const abbrev = { 
+            'Pre-Tax (401k/IRA)': 'Pre-Tax', 
+            'Stock Options': 'Stock Ops', 
+            'Roth IRA': 'Roth',
+            'Real Estate': 'Real Est'
+        };
         Object.entries(totals)
             .sort(([, a], [, b]) => Math.abs(b) - Math.abs(a))
             .forEach(([type, value]) => {
                 const item = document.createElement('div');
-                item.className = 'flex items-center justify-between gap-1 text-[9px] font-bold text-slate-400 truncate w-full pr-1';
+                item.className = 'flex items-center justify-between gap-1 text-[9px] font-bold text-slate-400 truncate w-full pr-1 h-3.5';
                 item.innerHTML = `
                     <div class="flex items-center gap-1.5 truncate">
                         <div class="w-1.5 h-1.5 rounded-full flex-shrink-0" style="background-color: ${assetColors[type] || '#fff'}"></div>

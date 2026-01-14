@@ -1,5 +1,3 @@
-
-
 export const generateId = () => Date.now().toString(36) + Math.random().toString(36).substring(2);
 
 export const assetColors = {
@@ -204,9 +202,12 @@ export const math = {
         return parseFloat(val.replace(/[^0-9.-]+/g, "")) || 0;
     },
     toSmartCompactCurrency: (val) => {
-        if (Math.abs(val) >= 1000000) return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1 }).format(val);
-        if (Math.abs(val) >= 1000) return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
-        return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(val);
+        const absVal = Math.abs(val);
+        const prefix = val < 0 ? '-' : '';
+        if (absVal >= 1000) {
+            return prefix + '$' + Math.round(absVal / 1000) + 'K';
+        }
+        return prefix + '$' + Math.round(absVal);
     },
     getFPL: (hhSize, stateName = 'Michigan') => {
         const stateCode = STATE_NAME_TO_CODE[stateName] || 'MI';

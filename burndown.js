@@ -4,6 +4,7 @@ import { math, engine, assetColors, stateTaxRates } from './utils.js';
 
 let isRealDollars = false;
 let firstInsolvencyAge = null; 
+let fullSimulationResults = [];
 
 export const burndown = {
     getIsRealDollars: () => isRealDollars,
@@ -24,7 +25,7 @@ export const burndown = {
                             <i class="fas fa-microchip text-sm"></i>
                         </div>
                         <div class="flex flex-col">
-                            <h2 class="text-xl font-bold text-white tracking-tight leading-none">Burndown Engine</h2>
+                            <h2 class="text-xl font-bold text-white tracking-tight leading-none uppercase tracking-tighter">Burndown Engine</h2>
                             <span class="text-[7px] font-bold text-slate-500 uppercase tracking-widest mt-1">Decumulation Logic Orchestrator</span>
                         </div>
                     </div>
@@ -190,6 +191,11 @@ export const burndown = {
         if (realBtn) {
             realBtn.onclick = () => { isRealDollars = !isRealDollars; burndown.updateToggleStyle(realBtn); burndown.run(); };
         }
+
+        const traceYearInput = document.getElementById('input-trace-year');
+        if (traceYearInput) {
+            traceYearInput.oninput = () => burndown.renderTrace();
+        }
     },
 
     renderPriorityList: () => {
@@ -274,20 +280,87 @@ export const burndown = {
     run: () => {
         const data = window.currentData; if (!data) return;
         
-        // Sync Retirement Age UI from central data
         const retAgeInput = document.querySelector('#tab-burndown input[data-id="retirementAge"]');
         if (retAgeInput && data.assumptions?.retirementAge) {
             retAgeInput.value = data.assumptions.retirementAge;
         }
 
         const config = burndown.scrape();
-        const results = burndown.simulateProjection(data, config);
+        fullSimulationResults = burndown.simulateProjection(data, config);
         
         if (document.getElementById('card-runway-val')) document.getElementById('card-runway-val').textContent = firstInsolvencyAge ? firstInsolvencyAge : "100+";
         if (document.getElementById('card-dwz-val')) document.getElementById('card-dwz-val').textContent = math.toSmartCompactCurrency(burndown.lastCalculatedResults.dwz || 0);
         if (document.getElementById('card-preservation-val')) document.getElementById('card-preservation-val').textContent = burndown.lastCalculatedResults.preservationAge || "100+";
 
-        if (document.getElementById('burndown-table-container')) document.getElementById('burndown-table-container').innerHTML = burndown.renderTable(results);
+        if (document.getElementById('burndown-table-container')) document.getElementById('burndown-table-container').innerHTML = burndown.renderTable(fullSimulationResults);
+        
+        burndown.renderTrace();
+    },
+
+    renderTrace: () => {
+        const container = document.getElementById('logic-trace-container');
+        const traceInput = document.getElementById('input-trace-year');
+        if (!container || !traceInput) return;
+
+        const targetYear = parseInt(traceInput.value);
+        const cycle = fullSimulationResults.find(r => r.year === targetYear);
+
+        if (!cycle) {
+            container.innerHTML = `<div class="flex items-center justify-center h-full text-slate-600 italic">No simulation data found for Year ${targetYear}.</div>`;
+            return;
+        }
+
+        const fmt = (v) => math.toCurrency(v);
+        const l = cycle.traceLog || [];
+
+        container.innerHTML = `
+            <div class="space-y-4">
+                <div class="border-b border-white/5 pb-2 mb-4 flex justify-between items-center">
+                    <span class="text-white font-black tracking-widest uppercase">--- AGE ${cycle.age} (${cycle.year}) ---</span>
+                    <span class="px-2 py-0.5 rounded text-[8px] font-black uppercase bg-blue-500/20 text-blue-400">${cycle.status}</span>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="space-y-2">
+                        <p class="text-teal-400 font-bold tracking-tight">Financial Inflows</p>
+                        <ul class="space-y-1 pl-4 border-l border-teal-500/20">
+                            <li><span class="text-slate-500 uppercase tracking-tighter mr-2">Base Income:</span> <span class="text-white font-bold">${fmt(cycle.floorGross)}</span></li>
+                            <li><span class="text-slate-500 uppercase tracking-tighter mr-2">Withdrawals:</span> <span class="text-white font-bold">${fmt(cycle.preTaxDraw)}</span></li>
+                            <li><span class="text-slate-500 uppercase tracking-tighter mr-2">SNAP Aid:</span> <span class="text-white font-bold">${fmt(cycle.snap)}</span></li>
+                        </ul>
+                    </div>
+                    <div class="space-y-2">
+                        <p class="text-red-400 font-bold tracking-tight">Total Costs</p>
+                        <ul class="space-y-1 pl-4 border-l border-red-500/20">
+                            <li><span class="text-slate-500 uppercase tracking-tighter mr-2">Target Budget:</span> <span class="text-white font-bold">${fmt(cycle.budget)}</span></li>
+                            <li><span class="text-slate-500 uppercase tracking-tighter mr-2">Taxes (Est):</span> <span class="text-white font-bold">-${fmt(cycle.taxes)}</span></li>
+                            <li><span class="text-slate-500 uppercase tracking-tighter mr-2">HELOC Interest:</span> <span class="text-white font-bold">-${fmt(cycle.helocInt)}</span></li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="bg-black/40 p-4 rounded-xl border border-white/5 space-y-2 mt-4">
+                    <p class="text-blue-400 font-black uppercase tracking-widest text-[9px] mb-2">Step-by-Step Solver Logic</p>
+                    ${l.map(entry => `
+                        <div class="flex items-start gap-3">
+                            <span class="text-slate-600 font-bold">»</span>
+                            <p class="text-[11px] leading-relaxed text-slate-300">${entry}</p>
+                        </div>
+                    `).join('')}
+                </div>
+
+                <div class="flex justify-between items-center pt-4 border-t border-white/5 mt-4">
+                    <div>
+                        <span class="text-slate-500 uppercase tracking-widest text-[9px]">Cycle Net Result:</span>
+                        <span class="ml-2 font-black text-white text-sm">${fmt(cycle.postTaxInc)} / ${fmt(cycle.budget)} Target</span>
+                    </div>
+                    <div class="text-right">
+                        <span class="text-slate-500 uppercase tracking-widest text-[9px]">End Balance NW:</span>
+                        <span class="ml-2 font-black text-teal-400 text-sm">${fmt(cycle.netWorth)}</span>
+                    </div>
+                </div>
+            </div>
+        `;
     },
 
     simulateProjection: (data, config) => {
@@ -323,7 +396,6 @@ export const burndown = {
             const totalHhSize = 1 + (filingStatus === 'Married Filing Jointly' ? 1 : 0) + (benefits.dependents || []).filter(d => (d.birthYear + 19) >= year).length;
             const fpl100 = math.getFPL(totalHhSize, assumptions.state) * infFac;
 
-            // Budget calculation using Sync vs Manual
             let baseBudget = config.useSync ? summaries.totalAnnualBudget : config.manualBudget;
             let targetBudget = baseBudget * infFac;
             const helocInterestThisYear = bal['heloc'] * helocInterestRate;
@@ -331,7 +403,6 @@ export const burndown = {
 
             let floorGross = 0, floorTaxable = 0;
             if (!isRet) {
-                // Working years: assume income covers everything
                 income.forEach(inc => {
                     let gross = math.fromCurrency(inc.amount) * (inc.isMonthly ? 12 : 1) * Math.pow(1 + (inc.increase / 100 || 0), i);
                     let netSrc = gross - (math.fromCurrency(inc.incomeExpenses) * (inc.incomeExpensesMonthly ? 12 : 1));
@@ -349,15 +420,17 @@ export const burndown = {
 
             const startOfYearBal = { ...bal };
             let drawMap = {}, preTaxDraw = 0, taxes = 0, snap = 0, status = 'Silver';
+            let traceLog = [];
 
-            // WORKING YEAR LOGIC: No draws.
             if (!isRet) {
                 taxes = engine.calculateTax(floorTaxable, 0, filingStatus, assumptions.state, infFac);
                 status = 'Active';
+                traceLog.push(`Currently working. Household generating ${math.toCurrency(floorGross)} net income.`);
+                traceLog.push(`No asset withdrawals required. Tax estimated at ${math.toCurrency(taxes)} based on ordinary income.`);
             } else {
-                // Binary search for SNAP Ceiling in Handout Hunter
                 let magiLimit = ceilings[filingStatus] * infFac;
                 if (persona === 'PLATINUM') {
+                    traceLog.push(`PLATINUM strategy enabled: Solving for Handout Hunter MAGI ceiling.`);
                     let low = 0, high = 300000 * infFac;
                     for (let j = 0; j < 12; j++) {
                         let mid = (low + high) / 2;
@@ -365,16 +438,17 @@ export const burndown = {
                         if (testSnap * 12 >= config.snapPreserve) { magiLimit = mid; low = mid; } else { high = mid; }
                     }
                     magiLimit = Math.min(magiLimit, ceilings[filingStatus] * infFac);
+                    traceLog.push(`Determined MAGI Ceiling of ${math.toCurrency(magiLimit)} to protect benefits.`);
                 }
 
-                // Solve Loop for Retirment Years
                 for (let iter = 0; iter < 5; iter++) {
                     bal = { ...startOfYearBal }; drawMap = {}; preTaxDraw = 0;
                     let curOrdDraw = 0, curLtcgDraw = 0;
 
-                    const solveWaterfall = (pList) => {
+                    const solveWaterfall = (pList, loggable = false) => {
                         for (const pk of pList) {
-                            const gap = targetBudget - ((floorGross + preTaxDraw + snap) - taxes);
+                            const currentNet = (floorGross + preTaxDraw + snap) - taxes;
+                            const gap = targetBudget - currentNet;
                             if (gap <= 10) break;
                             const av = (pk === 'cash' ? Math.max(0, bal[pk] - cashFloor) : (pk === 'heloc' ? Math.max(0, helocLimit - bal[pk]) : bal[pk]));
                             if (av <= 1) continue;
@@ -382,15 +456,16 @@ export const burndown = {
                             let bR = (['taxable', 'crypto', 'metals'].includes(pk) && bal[pk] > 0) ? bal[pk+'Basis'] / bal[pk] : 1;
                             let st = (stateTaxRates[assumptions.state]?.rate || 0);
                             
-                            // Marginal gross-up iteration: re-calc ETR based on current ordinary income
                             const testTax1 = engine.calculateTax(floorTaxable + curOrdDraw, curLtcgDraw, filingStatus, assumptions.state, infFac);
                             const testTax2 = engine.calculateTax(floorTaxable + curOrdDraw + 1000, curLtcgDraw, filingStatus, assumptions.state, infFac);
                             const marginalOrd = (testTax2 - testTax1) / 1000;
                             
                             let etr = burndown.assetMeta[pk].isTaxable ? (pk === '401k' ? marginalOrd : (1 - bR) * (0.15 + st)) : 0;
-                            if (etr >= 0.9) etr = 0.5; // Catch safety for weird math
+                            if (etr >= 0.9) etr = 0.5;
 
                             let draw = Math.min(av, gap / (1 - etr));
+                            if (iter === 4 && loggable) traceLog.push(`Drawing ${math.toCurrency(draw)} from ${burndown.assetMeta[pk].label}. Marginal drag estimated at ${Math.round(etr*100)}%. Remaining gap: ${math.toCurrency(gap-draw)}`);
+                            
                             if (pk === 'heloc') bal['heloc'] += draw;
                             else {
                                 if (bal[pk+'Basis']) bal[pk+'Basis'] -= (bal[pk+'Basis'] * (draw / bal[pk]));
@@ -413,34 +488,41 @@ export const burndown = {
                                 drawMap[pk] = (drawMap[pk] || 0) + pull; preTaxDraw += pull; curLtcgDraw += (pull * (1 - bR));
                             }
                         }
-                        solveWaterfall(['cash', 'roth-basis', 'hsa', 'heloc', '401k', 'roth-earnings']);
+                        solveWaterfall(['cash', 'roth-basis', 'hsa', 'heloc', '401k', 'roth-earnings'], iter === 4);
                     } else {
-                        solveWaterfall(burndown.priorityOrder);
+                        solveWaterfall(burndown.priorityOrder, iter === 4);
                     }
                     taxes = engine.calculateTax(floorTaxable + curOrdDraw, curLtcgDraw, filingStatus, assumptions.state, infFac);
                     snap = engine.calculateSnapBenefit(floorTaxable / 12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
                 }
                 const fMAGI = floorTaxable + (drawMap['401k'] || 0) + ((drawMap['taxable']||0)*(1-(startOfYearBal.taxableBasis/startOfYearBal.taxable||1)));
                 status = (age >= 65 ? 'Medicare' : (fMAGI/fpl100 <= 1.38 ? 'Platinum' : 'Silver'));
+                traceLog.push(`Final Cycle MAGI: ${math.toCurrency(fMAGI)} (${Math.round(fMAGI/fpl100*100)}% FPL). Resulting status: ${status}.`);
             }
 
             const postTaxInc = (floorGross + preTaxDraw + snap) - taxes;
             
-            // Net Worth unification math: (Liquid - helocLimit) + appreciate illiquid - amortize debts
             const reGrowth = Math.pow(1 + (assumptions.realEstateGrowth / 100), i);
-            const oaGrowth = Math.pow(1 + 0.02, i); // Assumed 2% for vehicles/misc
+            const oaGrowth = Math.pow(1 + 0.02, i);
             const curRE = realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) * reGrowth), 0);
             const curREDebt = realEstate.reduce((s, r) => s + Math.max(0, math.fromCurrency(r.mortgage) - (math.fromCurrency(r.principalPayment)*12*i)), 0);
             const curOA = otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) * oaGrowth), 0);
             const curOADebt = otherAssets.reduce((s, o) => s + Math.max(0, math.fromCurrency(o.loan) - (math.fromCurrency(o.principalPayment)*12*i)), 0);
             const curOtherDebt = debts.reduce((s, d) => s + Math.max(0, math.fromCurrency(d.balance) - (math.fromCurrency(d.principalPayment)*12*i)), 0);
             
+            // Stock options growth logic for NW
+            const optGrowth = Math.pow(1 + (assumptions.stockGrowth / 100), i);
+            const optionsNWValue = stockOptions.reduce((s, x) => {
+                const strike = math.fromCurrency(x.strikePrice);
+                const fmv = math.fromCurrency(x.currentPrice) * optGrowth;
+                return s + (Math.max(0, (fmv - strike) * parseFloat(x.shares)));
+            }, 0);
+
             const liquid = bal.cash + bal.taxable + bal.crypto + bal.metals + bal['401k'] + bal['roth-basis'] + bal['roth-earnings'] + bal.hsa;
-            const curNW = (liquid + curRE + curOA) - (bal['heloc'] + curREDebt + curOADebt + curOtherDebt);
+            const curNW = (liquid + curRE + curOA + optionsNWValue) - (bal['heloc'] + curREDebt + curOADebt + curOtherDebt);
 
             if (liquid < 1000 && firstInsolvencyAge === null) firstInsolvencyAge = age;
             if (liquid < 1000) status = 'INSOLVENT';
-            else if (isRet && Math.abs(postTaxInc - targetBudget) > 1000) status = 'ERROR';
 
             results.push({ 
                 age, year, 
@@ -451,7 +533,9 @@ export const burndown = {
                 balances: { ...bal }, 
                 draws: drawMap, 
                 postTaxInc, status, 
-                netWorth: curNW 
+                netWorth: curNW,
+                floorGross,
+                traceLog
             });
         }
         return results;
@@ -459,7 +543,6 @@ export const burndown = {
 
     renderTable: (results) => {
         const infRate = (window.currentData.assumptions.inflation || 3) / 100;
-        // Dynamically match column order to draw priority
         const columns = burndown.priorityOrder;
         
         const header = `<tr class="sticky top-0 bg-[#1e293b] !text-slate-500 label-std z-20 border-b border-white/5">

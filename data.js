@@ -108,7 +108,7 @@ function scrapeData() {
         income: getData('income-cards', ['name', 'amount', 'increase', 'contribution', 'match', 'bonusPct', 'isMonthly', 'incomeExpenses', 'incomeExpensesMonthly', 'nonTaxableUntil', 'remainsInRetirement', 'contribOnBonus', 'matchOnBonus']) ?? window.currentData.income
     };
 
-    const budgetSavings = getData('budget-savings-rows', ['type', 'monthly', 'annual', 'removedInRetirement']);
+    const budgetSavings = getData('budget-savings-rows', ['type', 'monthly', 'annual', 'remainsInRetirement']);
     const budgetExpenses = getData('budget-expenses-rows', ['name', 'monthly', 'annual', 'remainsInRetirement', 'isFixed']);
     
     newData.budget = {
@@ -219,14 +219,28 @@ export function updateSummaries() {
     const infFacRet = Math.pow(1 + inflation, yrsToRetire);
     const ssAtRet = (retirementAge >= ssStartAge) ? engine.calculateSocialSecurity(data.assumptions?.ssMonthly || 0, data.assumptions?.workYearsAtRetirement || 35, infFacRet) : 0;
     
-    set('sum-retirement-income-floor', ssAtRet);
+    // Add retirement income cards logic
+    const cardRetIncome = (data.income || []).filter(inc => inc.remainsInRetirement).reduce((s, inc) => {
+        let gross = math.fromCurrency(inc.amount) * (inc.isMonthly ? 12 : 1);
+        const growthFac = Math.pow(1 + (inc.increase / 100 || 0), yrsToRetire);
+        return s + (gross * growthFac);
+    }, 0);
+
+    set('sum-retirement-income-floor', ssAtRet + cardRetIncome);
     
-    // Real Value (2026 Dollars) calculation
     const realFloorEl = document.getElementById('sum-retirement-income-floor-real');
     if (realFloorEl) {
-        const ssAtRetReal = ssAtRet / infFacRet;
+        const ssAtRetReal = (ssAtRet + cardRetIncome) / infFacRet;
         realFloorEl.textContent = `${math.toCurrency(ssAtRetReal)} in 2026 Dollars`;
     }
 
-    set('sum-retire-budget', (data.budget?.expenses || []).reduce((s, e) => s + math.fromCurrency(e.annual) * (e.isFixed ? 1 : infFacRet), 0));
+    // Refined retirement budget calculation
+    const retireExp = (data.budget?.expenses || []).filter(e => e.remainsInRetirement).reduce((s, e) => {
+        return s + math.fromCurrency(e.annual) * (e.isFixed ? 1 : infFacRet);
+    }, 0);
+    const retireSav = (data.budget?.savings || []).filter(s => s.remainsInRetirement).reduce((s, s_item) => {
+        return s + math.fromCurrency(s_item.annual) * (s_item.isFixed ? 1 : infFacRet);
+    }, 0);
+
+    set('sum-retire-budget', retireExp + retireSav);
 }
