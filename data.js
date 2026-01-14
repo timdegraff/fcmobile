@@ -221,9 +221,15 @@ export function updateSummaries() {
     
     // Add retirement income cards logic
     const cardRetIncome = (data.income || []).filter(inc => inc.remainsInRetirement).reduce((s, inc) => {
-        let gross = math.fromCurrency(inc.amount) * (inc.isMonthly ? 12 : 1);
+        const isMon = inc.isMonthly === true || inc.isMonthly === 'true';
+        let gross = math.fromCurrency(inc.amount) * (isMon ? 12 : 1);
         const growthFac = Math.pow(1 + (inc.increase / 100 || 0), yrsToRetire);
-        return s + (gross * growthFac);
+        
+        const isExpMon = inc.incomeExpensesMonthly === true || inc.incomeExpensesMonthly === 'true';
+        const deductions = math.fromCurrency(inc.incomeExpenses) * (isExpMon ? 12 : 1);
+        
+        // Subtract deduction from the grown gross
+        return s + (gross * growthFac) - deductions;
     }, 0);
 
     set('sum-retirement-income-floor', ssAtRet + cardRetIncome);
