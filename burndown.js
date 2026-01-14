@@ -193,8 +193,20 @@ export const burndown = {
         }
 
         const traceYearInput = document.getElementById('input-trace-year');
-        if (traceYearInput) {
-            traceYearInput.oninput = () => burndown.renderTrace();
+        const traceAgeInput = document.getElementById('input-trace-age');
+        if (traceYearInput && traceAgeInput) {
+            traceYearInput.oninput = () => {
+                const year = parseInt(traceYearInput.value);
+                const match = fullSimulationResults.find(r => r.year === year);
+                if (match) traceAgeInput.value = match.age;
+                burndown.renderTrace();
+            };
+            traceAgeInput.oninput = () => {
+                const age = parseInt(traceAgeInput.value);
+                const match = fullSimulationResults.find(r => r.age === age);
+                if (match) traceYearInput.value = match.year;
+                burndown.renderTrace();
+            };
         }
     },
 
@@ -304,6 +316,19 @@ export const burndown = {
 
         fullSimulationResults = burndown.simulateProjection(data, config);
         
+        // Sync trace inputs if they don't match the new simulation start
+        const ty = document.getElementById('input-trace-year');
+        const ta = document.getElementById('input-trace-age');
+        if (ty && ta && fullSimulationResults.length > 0) {
+            const first = fullSimulationResults[0];
+            const currentYearVal = parseInt(ty.value);
+            const last = fullSimulationResults[fullSimulationResults.length - 1];
+            if (currentYearVal < first.year || currentYearVal > last.year) {
+                ty.value = first.year;
+                ta.value = first.age;
+            }
+        }
+
         if (document.getElementById('card-runway-val')) document.getElementById('card-runway-val').textContent = firstInsolvencyAge ? firstInsolvencyAge : "100+";
         if (document.getElementById('card-dwz-val')) document.getElementById('card-dwz-val').textContent = math.toSmartCompactCurrency(burndown.lastCalculatedResults.dwz || 0);
         if (document.getElementById('card-preservation-val')) document.getElementById('card-preservation-val').textContent = burndown.lastCalculatedResults.preservationAge || "100+";
@@ -419,23 +444,31 @@ export const burndown = {
             targetBudget += helocInterestThisYear;
 
             let floorGross = 0, floorTaxable = 0;
+            let floorGrossTrace = 0, floorDeductionTrace = 0;
+
             if (!isRet) {
                 income.forEach(inc => {
                     const isMon = inc.isMonthly === true || inc.isMonthly === 'true';
                     let gross = math.fromCurrency(inc.amount) * (isMon ? 12 : 1) * Math.pow(1 + (inc.increase / 100 || 0), i);
                     const isExpMon = inc.incomeExpensesMonthly === true || inc.incomeExpensesMonthly === 'true';
-                    let netSrc = gross - (math.fromCurrency(inc.incomeExpenses) * (isExpMon ? 12 : 1));
+                    let ded = (math.fromCurrency(inc.incomeExpenses) * (isExpMon ? 12 : 1));
+                    let netSrc = gross - ded;
                     if (isNaN(parseInt(inc.nonTaxableUntil)) || year >= inc.nonTaxableUntil) floorTaxable += netSrc;
                     floorGross += netSrc;
+                    floorGrossTrace += gross;
+                    floorDeductionTrace += ded;
                 });
             } else {
                 income.filter(inc => inc.remainsInRetirement).forEach(inc => {
                     const isMon = inc.isMonthly === true || inc.isMonthly === 'true';
                     let gross = math.fromCurrency(inc.amount) * (isMon ? 12 : 1) * Math.pow(1 + (inc.increase / 100 || 0), i);
                     const isExpMon = inc.incomeExpensesMonthly === true || inc.incomeExpensesMonthly === 'true';
-                    let netSrc = gross - (math.fromCurrency(inc.incomeExpenses) * (isExpMon ? 12 : 1));
+                    let ded = (math.fromCurrency(inc.incomeExpenses) * (isExpMon ? 12 : 1));
+                    let netSrc = gross - ded;
                     if (isNaN(parseInt(inc.nonTaxableUntil)) || year >= inc.nonTaxableUntil) floorTaxable += netSrc;
                     floorGross += netSrc;
+                    floorGrossTrace += gross;
+                    floorDeductionTrace += ded;
                 });
                 
                 // Add Social Security if age >= ssStartAge
@@ -444,6 +477,7 @@ export const burndown = {
                     const taxableSS = engine.calculateTaxableSocialSecurity(ssFull, floorTaxable, filingStatus);
                     floorGross += ssFull;
                     floorTaxable += taxableSS;
+                    floorGrossTrace += ssFull;
                 }
             }
 
@@ -454,9 +488,11 @@ export const burndown = {
             if (!isRet) {
                 taxes = engine.calculateTax(floorTaxable, 0, filingStatus, assumptions.state, infFac);
                 status = 'Active';
-                traceLog.push(`Currently working. Household generating ${math.toCurrency(floorGross)} net income.`);
-                traceLog.push(`No asset withdrawals required. Tax estimated at ${math.toCurrency(taxes)} based on ordinary income.`);
+                traceLog.push(`Household generating ${math.toCurrency(floorGrossTrace)} Gross - ${math.toCurrency(floorDeductionTrace)} Deductions = ${math.toCurrency(floorGross)} Net Base Income.`);
+                traceLog.push(`No asset withdrawals required while working. Tax estimated at ${math.toCurrency(taxes)}.`);
             } else {
+                traceLog.push(`Household generating ${math.toCurrency(floorGrossTrace)} Gross - ${math.toCurrency(floorDeductionTrace)} Deductions = ${math.toCurrency(floorGross)} Net Base Income.`);
+                
                 let magiLimit = ceilings[filingStatus] * infFac;
                 if (persona === 'PLATINUM') {
                     traceLog.push(`PLATINUM strategy enabled: Solving for Handout Hunter MAGI ceiling.`);
@@ -508,10 +544,20 @@ export const burndown = {
 
                     if (persona === 'PLATINUM') {
                         for (const pk of ['taxable', 'crypto', 'metals']) {
+                            // Check gap before opportunistic MAGI drawing to prevent account emptying
+                            const currentNetPre = (floorGross + preTaxDraw + snap) - taxes;
+                            if (targetBudget - currentNetPre <= 10) break;
+
                             let curMAGI = floorTaxable + curOrdDraw + curLtcgDraw;
                             if (curMAGI >= magiLimit) break;
                             let bR = bal[pk] > 0 ? bal[pk+'Basis'] / bal[pk] : 1;
+                            
+                            // Don't draw more than needed to hit MAGI limit OR close the budget gap
                             let pull = Math.min(bal[pk], (magiLimit - curMAGI) / (1 - bR));
+                            // Also constrain pull by approximate budget gap to avoid emptying account
+                            const roughNetCap = (targetBudget - currentNetPre) / 0.85; 
+                            pull = Math.min(pull, roughNetCap);
+
                             if (pull > 1) {
                                 bal[pk] -= pull; bal[pk+'Basis'] -= (bal[pk+'Basis'] * (pull / (bal[pk]+pull)));
                                 drawMap[pk] = (drawMap[pk] || 0) + pull; preTaxDraw += pull; curLtcgDraw += (pull * (1 - bR));
@@ -584,8 +630,8 @@ export const burndown = {
             <th class="p-2 text-center !bg-[#1e293b]">Gross Draw</th>
             <th class="p-2 text-center !bg-[#1e293b]">Tax Paid</th>
             ${columns.map(k => `<th class="p-2 text-center !bg-[#1e293b] text-[7px]" style="color:${burndown.assetMeta[k].color}">${burndown.assetMeta[k].short}</th>`).join('')}
-            <th class="p-2 text-center !bg-[#1e293b] text-teal-400">Post-Tax Inc</th>
-            <th class="p-2 text-center !bg-[#1e293b]">Net Worth</th>
+            <th class="p-2 text-center !bg-[#1e293b]">Post-Tax Inc</th>
+            <th class="p-2 text-center !bg-[#1e293b] text-teal-400">Net Worth</th>
         </tr>`;
         
         const rows = results.map((r, i) => {
@@ -612,8 +658,8 @@ export const burndown = {
                     <div class="font-black" style="color: ${r.draws[k] > 0 ? burndown.assetMeta[k].color : '#475569'}">${r.draws[k] > 1 ? formatVal(r.draws[k]) : '$0'}</div>
                     <div class="text-slate-600 text-[7px] font-bold">${formatVal(r.balances[k] || 0)}</div>
                 </td>`).join('')}
-                <td class="p-2 text-center font-black text-teal-400 bg-teal-400/5">${formatVal(r.postTaxInc)}</td>
-                <td class="p-2 text-center font-black text-white">${formatVal(r.netWorth)}</td>
+                <td class="p-2 text-center font-black text-white">${formatVal(r.postTaxInc)}</td>
+                <td class="p-2 text-center font-black text-teal-400 bg-teal-400/5">${formatVal(r.netWorth)}</td>
             </tr>`;
         }).join('');
         return `<table class="w-full text-left border-collapse table-auto">${header}<tbody>${rows}</tbody></table>`;
