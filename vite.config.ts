@@ -16,8 +16,9 @@ export default defineConfig(({ mode }) => {
       },
       resolve: {
         alias: {
-          // Fix: Replace __dirname with process.cwd() as __dirname is not available in ESM environments
-          '@': path.resolve(process.cwd(), '.'),
+          // Use path.resolve('.') which defaults to the current working directory, 
+          // avoiding direct process.cwd() access which can cause typing issues in some environments.
+          '@': path.resolve('.'),
         }
       }
     };
