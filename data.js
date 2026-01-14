@@ -1,4 +1,4 @@
-
+/** FIRECalc Stable v4.1.2 - Production Build **/
 import { engine, math } from './utils.js';
 import { benefits } from './benefits.js';
 import { burndown } from './burndown.js';

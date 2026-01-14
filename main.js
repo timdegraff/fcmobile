@@ -1,4 +1,4 @@
-
+/** FIRECalc Stable v4.1.2 - Production Build **/
 import { initializeUI } from './core.js';
 import { initializeData, updateSummaries, loadUserDataIntoUI, refreshAllModules } from './data.js';
 import { benefits } from './benefits.js';
