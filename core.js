@@ -1,3 +1,4 @@
+
 import { signInWithGoogle, logoutUser } from './auth.js';
 import { templates } from './templates.js';
 import { autoSave, updateSummaries, forceSyncData } from './data.js';
@@ -120,7 +121,6 @@ function attachGlobalListeners() {
                 const currentVal = (input.dataset.type === 'currency' || input.dataset.type === 'percent') ? math.fromCurrency(input.value) : (parseFloat(input.value) || 0);
                 const step = isMultiplier ? 0.1 : (parseFloat(input.step) || 0.5);
                 
-                // Snap logic: ensure the value always lands on a clean multiple of the step
                 let newVal;
                 if (btn.dataset.step === 'up') {
                     newVal = (Math.floor(currentVal / step + 0.0001) + 1) * step;
@@ -128,13 +128,11 @@ function attachGlobalListeners() {
                     newVal = (Math.ceil(currentVal / step - 0.0001) - 1) * step;
                 }
                 
-                // Clamp retirement age
                 if (btn.dataset.target === 'retirementAge') {
                     const curAge = parseFloat(window.currentData?.assumptions?.currentAge) || 40;
                     newVal = Math.max(curAge, Math.min(72, newVal));
                 }
 
-                // Precision Fix
                 newVal = parseFloat(newVal.toFixed(2));
 
                 if (input.dataset.type === 'currency') {
@@ -155,14 +153,6 @@ function attachGlobalListeners() {
             return;
         }
 
-        if (btn && btn.id === 'toggle-advanced-growth') {
-            const isNowAdvanced = !window.currentData.assumptions.advancedGrowth;
-            window.currentData.assumptions.advancedGrowth = isNowAdvanced;
-            window.createAssumptionControls(window.currentData);
-            if (window.debouncedAutoSave) window.debouncedAutoSave();
-            return;
-        }
-        
         if (btn && btn.dataset.action === 'toggle-freq') {
             const container = btn.closest('.relative') || btn.closest('.removable-item');
             const hiddenInput = container.querySelector(`input[data-id="${btn.dataset.target}"]`);
@@ -191,13 +181,10 @@ function attachGlobalListeners() {
         const target = e.target;
         const dataId = target.dataset.id;
 
-        // CRITICAL FIX: Only sync if the ID is a designated Global Sync key.
-        // This prevents repeating items (like multiple kids or account names) from linking.
         if (dataId && GLOBAL_SYNC_KEYS.includes(dataId)) {
             const isMultiplier = ['phaseGo1', 'phaseGo2', 'phaseGo3'].includes(dataId);
             let logicVal = (target.dataset?.type === 'currency' || target.dataset?.type === 'percent') ? math.fromCurrency(target.value) : parseFloat(target.value);
             
-            // Adjust logicVal for assumptions state (Engine expects whole numbers for growth, fractions for multipliers)
             if (target.dataset.type === 'percent' && target.type !== 'range' && !isMultiplier) {
                 logicVal *= 100;
             }
@@ -233,13 +220,6 @@ function attachGlobalListeners() {
             });
 
             if (window.currentData?.assumptions) {
-                const isBasic = !window.currentData.assumptions.advancedGrowth;
-                const assetPrefixes = ['stock', 'crypto', 'metals'];
-                assetPrefixes.forEach(prefix => {
-                    if (dataId === `${prefix}Growth` && isBasic) {
-                        window.currentData.assumptions[`${prefix}GrowthPerpetual`] = logicVal;
-                    }
-                });
                 window.currentData.assumptions[dataId] = logicVal;
             }
         }
@@ -259,19 +239,7 @@ function attachGlobalListeners() {
             }
         }
 
-        const stockRow = target.closest('#stock-option-rows tr');
-        if (stockRow) {
-            const shares = parseFloat(stockRow.querySelector('[data-id="shares"]')?.value) || 0;
-            const strike = math.fromCurrency(stockRow.querySelector('[data-id="strikePrice"]')?.value || "0");
-            const fmv = math.fromCurrency(stockRow.querySelector('[data-id="currentPrice"]')?.value || "0");
-            const equity = Math.max(0, (fmv - strike) * shares);
-            const display = stockRow.querySelector('[data-id="netEquityDisplay"]');
-            if (display) display.textContent = math.toCurrency(equity);
-        }
-
         if (target.closest('.input-base, .input-range, .benefit-slider, .mobile-slider') || target.closest('input[data-id]')) {
-            const incomeCard = target.closest('#income-cards .removable-item');
-            if (incomeCard) checkIrsLimits(incomeCard);
             if (dataId === 'retirementAge' && document.querySelector('[data-tab="burndown"]')?.classList.contains('active')) burndown.run();
             if (window.debouncedAutoSave) window.debouncedAutoSave();
         }
@@ -296,13 +264,6 @@ function attachGlobalListeners() {
                 target.value = curAge;
                 target.dispatchEvent(new Event('input', { bubbles: true }));
             } else if (val > 72) {
-                target.value = 72;
-                target.dispatchEvent(new Event('input', { bubbles: true }));
-            }
-        }
-        if (target.dataset.id === 'currentAge') {
-            let val = parseFloat(target.value);
-            if (val > 72) {
                 target.value = 72;
                 target.dispatchEvent(new Event('input', { bubbles: true }));
             }
@@ -351,7 +312,6 @@ function checkIrsLimits(row, isBudgetSavings = false) {
         const type = row.querySelector('[data-id="type"]')?.value;
         const annual = math.fromCurrency(row.querySelector('[data-id="annual"]')?.value || "0");
         if (type === 'HSA') {
-            // 2026 Family HSA limit baseline $8,550
             const hsaLimit = 8550;
             warning.classList.toggle('hidden', annual <= hsaLimit);
         } else {
@@ -384,13 +344,6 @@ window.updateSidebarChart = (data) => {
         const v = math.fromCurrency(i.value); 
         if (v !== 0) totals[i.type] = (totals[i.type] || 0) + v; 
     });
-    const optionsEquity = data.stockOptions?.reduce((s, x) => {
-        const shares = parseFloat(x.shares) || 0;
-        const strike = math.fromCurrency(x.strikePrice);
-        const fmv = math.fromCurrency(x.currentPrice);
-        return s + Math.max(0, (fmv - strike) * shares);
-    }, 0) || 0;
-    if (optionsEquity !== 0) totals['Stock Options'] = optionsEquity;
     const reEquity = data.realEstate?.reduce((s, r) => s + (math.fromCurrency(r.value) - math.fromCurrency(r.mortgage)), 0) || 0;
     if (reEquity !== 0) totals['Real Estate'] = reEquity;
     const oaEquity = data.otherAssets?.reduce((s, o) => s + (math.fromCurrency(o.value) - math.fromCurrency(o.loan)), 0) || 0;
@@ -424,7 +377,6 @@ window.createAssumptionControls = (data) => {
     const container = document.getElementById('assumptions-container'); 
     if (!container || !data) return;
     const a = data.assumptions || assumptions.defaults;
-    const isAdv = !!a.advancedGrowth;
     const curAge = parseFloat(a.currentAge) || 40;
 
     const renderComplexField = (label, id, value, min, max, step, colorClass, decimals = "1", isCurrency = false, isPercent = false) => {
@@ -448,33 +400,7 @@ window.createAssumptionControls = (data) => {
         </div>`;
     };
 
-    const renderAdvancedAPYRow = (label, prefix, colorClass) => {
-        if (!isAdv) {
-            return renderComplexField(label, `${prefix}Growth`, a[`${prefix}Growth`], 0, 15, 0.5, colorClass, "1", false, true);
-        }
-        return `
-            <div class="space-y-2 border-l border-white/10 pl-3">
-                <label class="text-[8px] font-black uppercase tracking-widest ${colorClass} block">${label}</label>
-                <div class="grid grid-cols-3 gap-2 items-end">
-                    <div class="space-y-1">
-                        <span class="text-[7px] font-black text-slate-600 uppercase block leading-none">Rate</span>
-                        ${templates.helpers.renderStepper(`${prefix}Growth`, a[`${prefix}Growth`], colorClass, "1", false, 0.5, true)}
-                    </div>
-                    <div class="space-y-1">
-                         <span class="text-[7px] font-black text-slate-600 uppercase block leading-none">For Yrs</span>
-                        ${templates.helpers.renderStepper(`${prefix}GrowthYears`, a[`${prefix}GrowthYears`] || 10, 'text-white', '0', false, 1)}
-                    </div>
-                    <div class="space-y-1">
-                        <span class="text-[7px] font-black text-slate-600 uppercase block leading-none">Final</span>
-                        ${templates.helpers.renderStepper(`${prefix}GrowthPerpetual`, a[`${prefix}GrowthPerpetual`] || a[`${prefix}Growth`], colorClass, "1", false, 0.5, true)}
-                    </div>
-                </div>
-            </div>
-        `;
-    };
-
     container.innerHTML = `
-        <!-- Card 1: Household & Timing -->
         <div class="card-container p-6 space-y-8 flex flex-col h-full">
             <div class="flex items-center gap-3 border-b border-white/5 pb-4">
                 <div class="w-8 h-8 rounded-lg bg-blue-500/20 flex items-center justify-center text-blue-400"><i class="fas fa-clock text-xs"></i></div>
@@ -486,25 +412,22 @@ window.createAssumptionControls = (data) => {
             ${renderComplexField("SS Monthly (Nominal)", "ssMonthly", a.ssMonthly, 0, 8000, 100, "text-teal-400", "0", true)}
         </div>
 
-        <!-- Card 2: Market Projections -->
         <div class="card-container p-6 space-y-8 flex flex-col h-full">
             <div class="flex items-center justify-between border-b border-white/5 pb-4">
                 <div class="flex items-center gap-3">
                     <div class="w-8 h-8 rounded-lg bg-orange-500/20 flex items-center justify-center text-orange-400"><i class="fas fa-chart-line text-xs"></i></div>
                     <h3 class="text-sm font-black text-white uppercase tracking-widest">Market Projections</h3>
                 </div>
-                <button id="toggle-advanced-growth" class="w-8 h-8 rounded-lg ${isAdv ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/20' : 'bg-white/5 text-slate-500'} flex items-center justify-center hover:bg-orange-500/20 transition-all"><i class="fas fa-cog text-xs"></i></button>
             </div>
-            <div class="${isAdv ? 'space-y-6' : 'space-y-8'}">
-                ${renderAdvancedAPYRow("Stock APY (%)", "stock", "text-blue-400")}
-                ${renderAdvancedAPYRow("Crypto APY (%)", "crypto", "text-slate-400")}
-                ${renderAdvancedAPYRow("Metals APY (%)", "metals", "text-amber-500")}
+            <div class="space-y-8">
+                ${renderComplexField("Stock APY (%)", "stockGrowth", a.stockGrowth, 0, 15, 0.5, "text-blue-400", "1", false, true)}
+                ${renderComplexField("Crypto APY (%)", "cryptoGrowth", a.cryptoGrowth, 0, 15, 0.5, "text-slate-400", "1", false, true)}
+                ${renderComplexField("Metals APY (%)", "metalsGrowth", a.metalsGrowth, 0, 15, 0.5, "text-amber-500", "1", false, true)}
             </div>
             ${renderComplexField("Real Estate (%)", "realEstateGrowth", a.realEstateGrowth, 0, 10, 0.1, "text-indigo-400", "1", false, true)}
             <div class="pt-4 border-t border-white/5">${renderComplexField("Annual Inflation (%)", "inflation", a.inflation, 0, 10, 0.1, "text-red-400", "1", false, true)}</div>
         </div>
 
-        <!-- Card 3: Tax & Status -->
         <div class="card-container p-6 space-y-3 flex flex-col h-full">
             <div class="flex items-center gap-3 border-b border-white/5 pb-3 mb-2">
                 <div class="w-8 h-8 rounded-lg bg-purple-500/20 flex items-center justify-center text-purple-400"><i class="fas fa-walking text-xs"></i></div>

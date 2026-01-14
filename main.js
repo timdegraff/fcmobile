@@ -4,7 +4,7 @@ import { initializeData, updateSummaries, loadUserDataIntoUI, refreshAllModules 
 import { benefits } from './benefits.js';
 import { burndown } from './burndown.js';
 import { projection } from './projection.js';
-import { PROFILE_25_SINGLE, PROFILE_45_COUPLE, PROFILE_55_RETIREE } from './profiles.js';
+import { PROFILE_25_SINGLE, PROFILE_45_COUPLE, PROFILE_55_RETIREE, BLANK_PROFILE } from './profiles.js';
 
 // Module init
 initializeUI();
@@ -21,20 +21,25 @@ async function bootstrap() {
     
     if (localData) {
         try {
-            await initializeData();
-            setupAppHeader(null, "Local User", "Reset App", true);
-            showApp();
+            const success = await initializeData();
+            if (success) {
+                showApp();
+            } else {
+                showProfileSelection();
+            }
         } catch (e) {
             console.error("Boot error", e);
             showProfileSelection();
         }
     } else {
+        // First time user or reset: show profile selection
         showProfileSelection();
     }
 
     function showApp() {
         if (loginScreen) loginScreen.classList.add('hidden');
         if (appContainer) appContainer.classList.remove('hidden');
+        setupAppHeader(null, "Local User", "Reset App", true);
         updateSummaries();
     }
 }
@@ -43,10 +48,24 @@ function showProfileSelection() {
     const modal = document.getElementById('profile-modal');
     const loginScreen = document.getElementById('login-screen');
     
-    if (loginScreen) loginScreen.classList.add('hidden');
+    if (loginScreen) {
+        // Change spinner text to invite entry
+        const textEl = loginScreen.querySelector('.flex.items-center');
+        if (textEl) {
+            textEl.innerHTML = `
+                <button id="btn-guest-entry" class="px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-black uppercase tracking-widest shadow-xl shadow-blue-900/40 active:scale-95 transition-all">
+                    Enter as Guest
+                </button>
+            `;
+            document.getElementById('btn-guest-entry').onclick = () => {
+                loginScreen.classList.add('hidden');
+                modal.classList.remove('hidden');
+            };
+        }
+    }
+    
     if (!modal) return;
     
-    modal.classList.remove('hidden');
     modal.querySelectorAll('button').forEach(b => {
         b.onclick = async () => {
             const type = b.dataset.profile;
@@ -56,13 +75,8 @@ function showProfileSelection() {
             else if (type === '55') data = JSON.parse(JSON.stringify(PROFILE_55_RETIREE));
             else if (type === '45') data = JSON.parse(JSON.stringify(PROFILE_45_COUPLE));
             else {
-                data = JSON.parse(JSON.stringify(PROFILE_25_SINGLE));
-                data.investments = [];
-                data.income = [];
-                data.budget.expenses = [];
-                data.budget.savings = [];
-                data.realEstate = [];
-                data.debts = [];
+                // Use BLANK_PROFILE pre-populated with your specific screenshot data
+                data = JSON.parse(JSON.stringify(BLANK_PROFILE));
             }
 
             localStorage.setItem('firecalc_data', JSON.stringify(data));
@@ -77,9 +91,6 @@ function showProfileSelection() {
 }
 
 function setupAppHeader(avatarUrl, userName, logoutText, isLoggedIn) {
-    const avatar = document.getElementById('user-avatar');
-    if (avatar) avatar.src = avatarUrl || "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%2394a3b8'%3E%3Cpath d='M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z'/%3E%3C/svg%3E";
-    
     const name = document.getElementById('user-name');
     if (name) name.textContent = userName || "Local User";
     
@@ -87,7 +98,7 @@ function setupAppHeader(avatarUrl, userName, logoutText, isLoggedIn) {
     if (logoutBtn) {
         logoutBtn.textContent = logoutText;
         logoutBtn.onclick = async () => {
-            if (confirm("This will PERMANENTLY clear your local data. Are you sure?")) {
+            if (confirm("This will PERMANENTLY clear your local data and reset the simulator. Are you sure?")) {
                 localStorage.removeItem('firecalc_data');
                 window.location.reload();
             }

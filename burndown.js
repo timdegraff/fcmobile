@@ -153,6 +153,10 @@ export const burndown = {
                     const inp = document.getElementById('input-manual-budget');
                     inp.disabled = el.checked;
                     inp.classList.toggle('opacity-40', el.checked);
+                    if (el.checked) {
+                         const summaries = engine.calculateSummaries(window.currentData);
+                         inp.value = math.toCurrency(summaries.totalAnnualBudget);
+                    }
                 }
                 burndown.run();
                 if (window.debouncedAutoSave) window.debouncedAutoSave();
@@ -285,6 +289,7 @@ export const burndown = {
         
         const summaries = engine.calculateSummaries(data);
         const helocInterestRate = (parseFloat(helocs[0]?.rate) || 7) / 100;
+        
         let bal = {
             'cash': investments.filter(i => i.type === 'Cash').reduce((s, i) => s + math.fromCurrency(i.value), 0),
             'taxable': investments.filter(i => i.type === 'Taxable').reduce((s, i) => s + math.fromCurrency(i.value), 0),
@@ -313,7 +318,8 @@ export const burndown = {
             // Budget calculation using Sync vs Manual
             let baseBudget = config.useSync ? summaries.totalAnnualBudget : config.manualBudget;
             let targetBudget = baseBudget * infFac;
-            targetBudget += bal['heloc'] * helocInterestRate;
+            const helocInterestThisYear = bal['heloc'] * helocInterestRate;
+            targetBudget += helocInterestThisYear;
 
             let floorGross = 0, floorTaxable = 0;
             if (!isRet) {
@@ -428,7 +434,17 @@ export const burndown = {
             if (liquid < 1000) status = 'INSOLVENT';
             else if (isRet && Math.abs(postTaxInc - targetBudget) > 1000) status = 'ERROR';
 
-            results.push({ age, year, budget: targetBudget, isFirstRetYear: age === rAge, preTaxDraw, taxes, snap, balances: { ...bal }, draws: drawMap, postTaxInc, status, netWorth: curNW });
+            results.push({ 
+                age, year, 
+                budget: targetBudget, 
+                helocInt: helocInterestThisYear,
+                isFirstRetYear: age === rAge, 
+                preTaxDraw, taxes, snap, 
+                balances: { ...bal }, 
+                draws: drawMap, 
+                postTaxInc, status, 
+                netWorth: curNW 
+            });
         }
         return results;
     },
@@ -459,6 +475,7 @@ export const burndown = {
                 <td class="p-2 text-center">
                     <div class="${r.isFirstRetYear ? 'text-white' : 'text-slate-400'}">${formatVal(r.budget)}</div>
                     ${r.isFirstRetYear ? '<div class="text-[7px] font-black text-amber-500 uppercase leading-none mt-0.5">Ret Year</div>' : ''}
+                    ${r.helocInt > 10 ? `<div class="text-[7px] font-black text-orange-400 uppercase leading-none mt-0.5">+${formatVal(r.helocInt)} HELOC INT</div>` : ''}
                 </td>
                 <td class="p-2 text-center"><span class="px-2 py-0.5 rounded-[4px] text-[7px] font-black uppercase tracking-wider ${badgeClass}">${r.status}</span></td>
                 <td class="p-2 text-center text-white font-bold">${formatVal(r.preTaxDraw)}</td>
