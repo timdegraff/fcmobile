@@ -1,5 +1,3 @@
-
-
 import { math, engine, stateTaxRates, STATE_NAME_TO_CODE } from './utils.js';
 
 export const benefits = {
@@ -380,17 +378,17 @@ export const benefits = {
                 planEl.innerHTML = `
                     <div class="flex flex-col items-center text-center">
                         <span class="text-xl font-black uppercase tracking-tight ${theme.text}">${name}</span>
-                        <span class="text-[10px] font-black uppercase tracking-widest opacity-60 mt-1">${sub}</span>
+                        <span class="text-[10px] font-black uppercase tracking-widest text-slate-500 mt-1">${sub}</span>
+                        <div class="flex items-center gap-3 mt-2">
+                             <span class="text-[8px] font-black text-slate-600 uppercase tracking-widest">PREM: <span class="text-white mono-numbers">${prem}</span></span>
+                             <span class="text-[8px] font-black text-slate-600 uppercase tracking-widest">DED: <span class="text-white mono-numbers">${ded}</span></span>
+                        </div>
                     </div>
                 `;
             }
             if (healthCard) {
                 healthCard.className = `p-6 flex flex-col items-center justify-center h-28 border-l-4 transition-all duration-300 rounded-2xl bg-slate-900/40 border-2 ${theme.border}`;
             }
-            const premEl = document.getElementById('sum-health-prem');
-            const dedEl = document.getElementById('sum-health-ded');
-            if (premEl) premEl.textContent = prem;
-            if (dedEl) dedEl.textContent = ded;
         };
 
         const isInMedicaidGap = !hasMedicaidPathway && ratio < 1.0;

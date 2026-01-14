@@ -60,7 +60,7 @@ export const burndown = {
                 </div>
 
                 <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
-                    <div id="card-preservation" class="bg-slate-900/50 rounded-2xl border border-slate-800 p-4 flex flex-col justify-between h-28 relative overflow-hidden">
+                    <div id="card-preservation" class="bg-slate-900/50 rounded-2xl border border-slate-800 p-4 flex flex-col justify-between h-28 relative overflow-hidden cursor-pointer hover:border-amber-500/30 transition-colors" title="Optimize for Legacy Preservation">
                         <div class="absolute right-0 top-0 p-3"><i class="fas fa-infinity text-4xl text-amber-500 opacity-20"></i></div>
                         <div>
                             <label class="text-[9px] font-bold text-amber-500 uppercase tracking-widest mb-1 flex items-center gap-1"><i class="fas fa-shield-alt"></i> Preservation Age</label>
@@ -78,7 +78,7 @@ export const burndown = {
                         <div id="card-runway-sub" class="text-[9px] font-bold text-blue-400/60 uppercase tracking-tighter leading-none">SUSTAINS TARGET BUDGET IN 2026 DOLLARS UNTIL THIS AGE</div>
                     </div>
 
-                    <div id="card-dwz" class="bg-slate-900/50 rounded-2xl border border-slate-800 p-4 flex flex-col justify-between h-28 relative overflow-hidden">
+                    <div id="card-dwz" class="bg-slate-900/50 rounded-2xl border border-slate-800 p-4 flex flex-col justify-between h-28 relative overflow-hidden cursor-pointer hover:border-pink-500/30 transition-colors" title="Solve for Max Sustainable Spend">
                         <div class="absolute right-0 top-0 p-3"><i class="fas fa-skull text-4xl text-pink-400 opacity-20"></i></div>
                         <div>
                             <label class="text-[9px] font-bold text-pink-400 uppercase tracking-widest mb-1 flex items-center gap-1"><i class="fas fa-glass-cheers"></i> Die With Zero</label>
@@ -239,7 +239,8 @@ export const burndown = {
         if (data?.priority) burndown.priorityOrder = [...new Set(data.priority)];
         isRealDollars = !!data?.isRealDollars;
         if (data) {
-            const mode = data.strategyMode || 'PLATINUM', personaSelector = document.getElementById('persona-selector');
+            const mode = data.strategyMode || 'RAW';
+            const personaSelector = document.getElementById('persona-selector');
             if (personaSelector) { const btn = personaSelector.querySelector(`[data-mode="${mode}"]`); if (btn) btn.click(); }
             
             const sync = (id, val) => { const el = document.getElementById(id); if (el) { el.value = val; el.dispatchEvent(new Event('input')); } };
@@ -262,7 +263,7 @@ export const burndown = {
 
     scrape: () => ({
         priority: burndown.priorityOrder,
-        strategyMode: document.getElementById('persona-selector')?.dataset.value || 'PLATINUM',
+        strategyMode: document.getElementById('persona-selector')?.dataset.value || 'RAW',
         cashReserve: parseInt(document.getElementById('input-cash-reserve')?.value || 25000),
         snapPreserve: parseInt(document.getElementById('input-snap-preserve')?.value || 0), 
         useSync: document.getElementById('toggle-budget-sync')?.checked ?? true,
@@ -272,6 +273,13 @@ export const burndown = {
 
     run: () => {
         const data = window.currentData; if (!data) return;
+        
+        // Sync Retirement Age UI from central data
+        const retAgeInput = document.querySelector('#tab-burndown input[data-id="retirementAge"]');
+        if (retAgeInput && data.assumptions?.retirementAge) {
+            retAgeInput.value = data.assumptions.retirementAge;
+        }
+
         const config = burndown.scrape();
         const results = burndown.simulateProjection(data, config);
         
@@ -451,7 +459,8 @@ export const burndown = {
 
     renderTable: (results) => {
         const infRate = (window.currentData.assumptions.inflation || 3) / 100;
-        const columns = ['cash', 'taxable', 'roth-basis', 'heloc', 'crypto', 'metals', '401k', 'hsa', 'roth-earnings'];
+        // Dynamically match column order to draw priority
+        const columns = burndown.priorityOrder;
         
         const header = `<tr class="sticky top-0 bg-[#1e293b] !text-slate-500 label-std z-20 border-b border-white/5">
             <th class="p-2 w-10 text-center !bg-[#1e293b]">Age</th>

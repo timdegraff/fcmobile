@@ -1,4 +1,4 @@
-
+/** FIRECalc Stable v4.1.2 - Production Build **/
 import { signInWithGoogle, logoutUser } from './auth.js';
 import { templates } from './templates.js';
 import { autoSave, updateSummaries, forceSyncData } from './data.js';

@@ -218,6 +218,15 @@ export function updateSummaries() {
 
     const infFacRet = Math.pow(1 + inflation, yrsToRetire);
     const ssAtRet = (retirementAge >= ssStartAge) ? engine.calculateSocialSecurity(data.assumptions?.ssMonthly || 0, data.assumptions?.workYearsAtRetirement || 35, infFacRet) : 0;
+    
     set('sum-retirement-income-floor', ssAtRet);
+    
+    // Real Value (2026 Dollars) calculation
+    const realFloorEl = document.getElementById('sum-retirement-income-floor-real');
+    if (realFloorEl) {
+        const ssAtRetReal = ssAtRet / infFacRet;
+        realFloorEl.textContent = `${math.toCurrency(ssAtRetReal)} in 2026 Dollars`;
+    }
+
     set('sum-retire-budget', (data.budget?.expenses || []).reduce((s, e) => s + math.fromCurrency(e.annual) * (e.isFixed ? 1 : infFacRet), 0));
 }
