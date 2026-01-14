@@ -1,4 +1,3 @@
-
 export const BLANK_PROFILE = {
     investments: [
         { name: 'TIM 401K', type: 'Pre-Tax (401k/IRA)', value: 670600, costBasis: 0 },
@@ -32,9 +31,9 @@ export const BLANK_PROFILE = {
         { name: 'HOME DEPOT', balance: 16500, principalPayment: 160 }
     ],
     income: [
-        { name: 'GM SALARY', amount: 186561, increase: 3.5, contribution: 12.5, match: 10, bonusPct: 23, isMonthly: false, incomeExpenses: 0, remainsInRetirement: false, contribOnBonus: true, matchOnBonus: true },
-        { name: 'CELL TOWER', amount: 1200, increase: 1.5, contribution: 0, match: 0, bonusPct: 0, isMonthly: true, incomeExpenses: 0, remainsInRetirement: true },
-        { name: '11475 RENTAL', amount: 1575, increase: 3, contribution: 0, match: 0, bonusPct: 0, isMonthly: true, incomeExpenses: 450, incomeExpensesMonthly: true, remainsInRetirement: true }
+        { name: 'GM SALARY', amount: 186561, increase: 3.5, contribution: 12.5, match: 10, bonusPct: 23, isMonthly: false, incomeExpenses: 0, remainsInRetirement: false, contribOnBonus: false, matchOnBonus: false },
+        { name: 'CELL TOWER', amount: 1200, increase: 1.5, contribution: 0, match: 0, bonusPct: 0, isMonthly: true, incomeExpenses: 0, remainsInRetirement: false, contribOnBonus: false, matchOnBonus: false },
+        { name: '11475 RENTAL', amount: 1575, increase: 3, contribution: 0, match: 0, bonusPct: 0, isMonthly: true, incomeExpenses: 450, incomeExpensesMonthly: true, remainsInRetirement: false, contribOnBonus: false, matchOnBonus: false }
     ],
     budget: {
         savings: [

@@ -1,3 +1,4 @@
+
 import { engine, math } from './utils.js';
 import { benefits } from './benefits.js';
 import { burndown } from './burndown.js';
@@ -8,17 +9,23 @@ window.currentData = null;
 window.saveTimeout = null;
 
 export async function initializeData() {
-    const local = localStorage.getItem('firecalc_data');
-    if (local) {
-        try {
+    // If we already have data in memory (from a fresh profile selection), skip local check
+    if (window.currentData) {
+        loadUserDataIntoUI();
+        refreshAllModules();
+        return true;
+    }
+
+    try {
+        const local = localStorage.getItem('firecalc_data');
+        if (local) {
             window.currentData = JSON.parse(local);
             loadUserDataIntoUI();
             refreshAllModules();
             return true;
-        } catch(e) {
-            console.error("Local Load Error:", e);
-            return false;
         }
+    } catch(e) {
+        console.warn("Local storage read failed:", e);
     }
     return false;
 }
@@ -158,7 +165,11 @@ export function autoSave(updateUI = true) {
             if(window.updateSidebarChart) window.updateSidebarChart(newData);
         }
 
-        localStorage.setItem('firecalc_data', JSON.stringify(newData));
+        try {
+            localStorage.setItem('firecalc_data', JSON.stringify(newData));
+        } catch (e) {
+            console.warn("Auto-save to localStorage failed (restricted environment)");
+        }
         showSaveIndicator();
     }, 1000);
 }
@@ -168,8 +179,8 @@ window.debouncedAutoSave = () => autoSave(true);
 function showSaveIndicator() {
     const el = document.getElementById('save-indicator');
     if (!el) return;
-    el.classList.add('text-emerald-400');
-    setTimeout(() => el.classList.remove('text-emerald-400'), 100);
+    el.classList.add('bg-emerald-400');
+    setTimeout(() => el.classList.remove('bg-emerald-400'), 500);
 }
 
 export function updateSummaries() {
@@ -198,8 +209,12 @@ export function updateSummaries() {
     const currentYear = new Date().getFullYear();
 
     const yrsToRetire = Math.max(0, retirementAge - currentAge);
-    set('sum-yrs-to-retire', yrsToRetire, false);
-    set('sum-life-exp', engine.getLifeExpectancy(currentAge) + currentAge, false);
+    const retYear = currentYear + yrsToRetire;
+    
+    const lblRet1 = document.getElementById('label-ret-year-summary');
+    if (lblRet1) lblRet1.textContent = retYear;
+    const lblRet2 = document.getElementById('label-ret-year-budget');
+    if (lblRet2) lblRet2.textContent = retYear;
 
     const infFacRet = Math.pow(1 + inflation, yrsToRetire);
     const ssAtRet = (retirementAge >= ssStartAge) ? engine.calculateSocialSecurity(data.assumptions?.ssMonthly || 0, data.assumptions?.workYearsAtRetirement || 35, infFacRet) : 0;

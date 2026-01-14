@@ -16,8 +16,13 @@ async function bootstrap() {
     const loginScreen = document.getElementById('login-screen');
     const appContainer = document.getElementById('app-container');
     
-    // Check local storage for existing data
-    const localData = localStorage.getItem('firecalc_data');
+    let localData = null;
+    try {
+        // Try to read from local storage - this can throw SecurityError in some sandboxed environments
+        localData = localStorage.getItem('firecalc_data');
+    } catch (e) {
+        console.warn("Storage access restricted. Proceeding to profile selection.", e);
+    }
     
     if (localData) {
         try {
@@ -32,7 +37,7 @@ async function bootstrap() {
             showProfileSelection();
         }
     } else {
-        // First time user or reset: show profile selection
+        // First time user or reset or restricted storage: show profile selection
         showProfileSelection();
     }
 
@@ -59,9 +64,15 @@ function showProfileSelection() {
             `;
             document.getElementById('btn-guest-entry').onclick = () => {
                 loginScreen.classList.add('hidden');
-                modal.classList.remove('hidden');
+                if (modal) modal.classList.remove('hidden');
             };
+        } else {
+            // Fallback: if we can't find the text element to replace, just show the modal
+            loginScreen.classList.add('hidden');
+            if (modal) modal.classList.remove('hidden');
         }
+    } else if (modal) {
+        modal.classList.remove('hidden');
     }
     
     if (!modal) return;
@@ -79,8 +90,15 @@ function showProfileSelection() {
                 data = JSON.parse(JSON.stringify(BLANK_PROFILE));
             }
 
-            localStorage.setItem('firecalc_data', JSON.stringify(data));
+            try {
+                localStorage.setItem('firecalc_data', JSON.stringify(data));
+            } catch (e) {
+                console.warn("Could not save to local storage (restricted environment)");
+            }
+
             modal.classList.add('hidden');
+            // Set data to window directly so initializeData can pick it up even if localStorage fails
+            window.currentData = data; 
             await initializeData();
             setupAppHeader(null, "Local User", "Reset App", true);
             document.getElementById('app-container').classList.remove('hidden');
@@ -99,7 +117,9 @@ function setupAppHeader(avatarUrl, userName, logoutText, isLoggedIn) {
         logoutBtn.textContent = logoutText;
         logoutBtn.onclick = async () => {
             if (confirm("This will PERMANENTLY clear your local data and reset the simulator. Are you sure?")) {
-                localStorage.removeItem('firecalc_data');
+                try {
+                    localStorage.removeItem('firecalc_data');
+                } catch (e) {}
                 window.location.reload();
             }
         };
