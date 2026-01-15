@@ -196,18 +196,24 @@ export const burndown = {
         const traceAgeInput = document.getElementById('input-trace-age');
         if (traceYearInput && traceAgeInput) {
             traceYearInput.oninput = () => {
-                const year = parseInt(traceYearInput.value);
-                const firstYear = fullSimulationResults[0]?.year || 2026;
-                if (year < firstYear) traceYearInput.value = firstYear;
-                const match = fullSimulationResults.find(r => r.year === parseInt(traceYearInput.value));
+                const results = fullSimulationResults;
+                if (!results.length) return;
+                const first = results[0].year, last = results[results.length-1].year;
+                let val = parseInt(traceYearInput.value);
+                if (val < first) { val = first; traceYearInput.value = first; }
+                if (val > last) { val = last; traceYearInput.value = last; }
+                const match = results.find(r => r.year === val);
                 if (match) traceAgeInput.value = match.age;
                 burndown.renderTrace();
             };
             traceAgeInput.oninput = () => {
-                const age = parseInt(traceAgeInput.value);
-                const firstAge = fullSimulationResults[0]?.age || 40;
-                if (age < firstAge) traceAgeInput.value = firstAge;
-                const match = fullSimulationResults.find(r => r.age === parseInt(traceAgeInput.value));
+                const results = fullSimulationResults;
+                if (!results.length) return;
+                const first = results[0].age, last = results[results.length-1].age;
+                let val = parseInt(traceAgeInput.value);
+                if (val < first) { val = first; traceAgeInput.value = first; }
+                if (val > last) { val = last; traceAgeInput.value = last; }
+                const match = results.find(r => r.age === val);
                 if (match) traceYearInput.value = match.year;
                 burndown.renderTrace();
             };
@@ -521,7 +527,7 @@ export const burndown = {
             } else {
                 traceLog.push(`Household generating ${math.toCurrency(floorGrossTrace)} Gross - ${math.toCurrency(floorDeductionTrace)} Deductions = ${math.toCurrency(floorGross)} Net Base Income.`);
                 
-                // Dynamic ceiling replacement: Indexing benefit thresholds to 400% FPL + inflation
+                // Dynamic ceiling replacement
                 let magiLimit = fpl100 * 4.0; 
                 if (persona === 'PLATINUM') {
                     traceLog.push(`PLATINUM strategy enabled: Solving for Handout Hunter MAGI ceiling.`);
@@ -551,24 +557,25 @@ export const burndown = {
                             let bR = (['taxable', 'crypto', 'metals'].includes(pk) && bal[pk] > 0) ? bal[pk+'Basis'] / bal[pk] : 1;
                             let st = (stateTaxRates[assumptions.state]?.rate || 0);
                             
-                            const testTax1 = engine.calculateTax(floorTaxable + curOrdDraw, curLtcgDraw, filingStatus, assumptions.state, infFac);
-                            
-                            // FIX: Instead of testing a small $1000 increment, test the WHOLE gap impact
-                            // to calculate a Projected Chunk Tax Rate (PCTR) for this specific draw.
-                            const testTaxFull = engine.calculateTax(floorTaxable + curOrdDraw + gap, curLtcgDraw, filingStatus, assumptions.state, infFac);
-                            let projectedTaxDragRate = (testTaxFull - testTax1) / Math.max(1, gap);
-                            
-                            // Factor in benefit cliff impact for non-linear optimization
-                            const snapIncomeLimit = fpl100 * 2.0; 
-                            const isCurrentlyInSnapZone = (floorTaxable + curOrdDraw) <= snapIncomeLimit;
-                            const willProjectedDrawExceedSnapZone = (floorTaxable + curOrdDraw + gap) > snapIncomeLimit;
-                            
-                            let snapDrag = (isCurrentlyInSnapZone && !willProjectedDrawExceedSnapZone) ? 0.30 : (isCurrentlyInSnapZone ? 0.10 : 0);
-                            
-                            let etr = burndown.assetMeta[pk].isTaxable ? (pk === '401k' ? projectedTaxDragRate + snapDrag : (1 - bR) * (0.15 + st + snapDrag)) : 0;
-                            if (etr >= 0.95) etr = 0.60; // Safety cap to prevent infinite draw spikes
+                            // resolver pre-flight logic
+                            const currentMAGI = floorTaxable + curOrdDraw + curLtcgDraw;
+                            const testTaxBase = engine.calculateTax(floorTaxable + curOrdDraw, curLtcgDraw, filingStatus, assumptions.state, infFac);
+                            const testSnapBase = engine.calculateSnapBenefit((floorTaxable + curOrdDraw)/12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
 
-                            let draw = Math.min(av, gap / (1 - etr));
+                            // Project the tax/benefit drag for the ENTIRE gap
+                            const testTaxTarget = engine.calculateTax(floorTaxable + curOrdDraw + gap, curLtcgDraw, filingStatus, assumptions.state, infFac);
+                            const testSnapTarget = engine.calculateSnapBenefit((floorTaxable + curOrdDraw + gap)/12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
+                            
+                            const netBenefitChange = (testSnapTarget - testSnapBase) - (testTaxTarget - testTaxBase);
+                            let totalMarginalDrag = -netBenefitChange / Math.max(1, gap);
+
+                            // Iron Fist Safety: Dampen the drag if it's over-projecting benefit loss already occurred
+                            if (iter > 1 && totalMarginalDrag > 0.5) totalMarginalDrag = 0.4;
+                            
+                            let etr = burndown.assetMeta[pk].isTaxable ? (pk === '401k' ? totalMarginalDrag : (1 - bR) * (0.15 + st + totalMarginalDrag)) : 0;
+                            if (etr >= 0.95) etr = 0.50; 
+
+                            let draw = Math.min(av, gap / (1 - Math.max(0, etr)));
                             if (iter === 9 && loggable) traceLog.push(`Drawing ${math.toCurrency(draw)} from ${burndown.assetMeta[pk].label}. Marginal drag estimated at ${Math.round(etr*100)}%. Remaining gap: ${math.toCurrency(gap-draw)}`);
                             
                             if (pk === 'heloc') bal['heloc'] += draw;
@@ -597,28 +604,22 @@ export const burndown = {
                             let pull = Math.min(bal[pk], pullAllowedByMAGI, pullNeededForGap);
 
                             if (pull > 1) {
-                                bal[pk] -= pull; bal[pk+'Basis'] -= (bal[pk+'Basis'] * (pull / (bal[pk]+pull)));
+                                bal[pk] -= pull; 
+                                if (bal[pk+'Basis']) bal[pk+'Basis'] -= (bal[pk+'Basis'] * (pull / (bal[pk]+pull)));
                                 drawMap[pk] = (drawMap[pk] || 0) + pull; preTaxDraw += pull; curLtcgDraw += (pull * (1 - bR));
                             }
                         }
-                        const standardOrderedRemaining = burndown.priorityOrder.filter(k => !['taxable', 'crypto', 'metals'].includes(k));
-                        const finalOrder = [...standardOrderedRemaining];
-                        const idxHSA = finalOrder.indexOf('hsa'), idxHELOC = finalOrder.indexOf('heloc');
-                        if (idxHSA !== -1 && idxHELOC !== -1 && idxHELOC > idxHSA) {
-                             finalOrder.splice(idxHELOC, 1); finalOrder.splice(idxHSA, 0, 'heloc');
-                        }
-                        solveWaterfall(finalOrder, iter === 9);
+                        const stdRemaining = burndown.priorityOrder.filter(k => !['taxable', 'crypto', 'metals'].includes(k));
+                        solveWaterfall(stdRemaining, iter === 9);
                     } else {
                         solveWaterfall(burndown.priorityOrder, iter === 9);
                     }
                     taxes = engine.calculateTax(floorTaxable + curOrdDraw, curLtcgDraw, filingStatus, assumptions.state, infFac);
                     snap = engine.calculateSnapBenefit((floorTaxable + curOrdDraw) / 12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
 
-                    // ADAPTIVE BREAKERS
                     const iterPostTax = (floorGross + preTaxDraw + snap) - taxes;
                     const iterError = Math.abs(iterPostTax - targetBudget) / targetBudget;
                     if (iter >= 2 && iterError <= 0.005) break; 
-                    if (iter >= 4 && iterError <= 0.01) break;  
                 }
                 const fMAGI = floorTaxable + (drawMap['401k'] || 0) + ((drawMap['taxable']||0)*(1-(startOfYearBal.taxableBasis/startOfYearBal.taxable||1)));
                 status = (age >= 65 ? 'Medicare' : (fMAGI/fpl100 <= 1.38 ? 'Platinum' : 'Silver'));
@@ -634,7 +635,7 @@ export const burndown = {
             bal['529'] *= (1 + stockGrowth);
             
             const liquid = bal.cash + bal.taxable + bal.crypto + bal.metals + bal['401k'] + bal['roth-basis'] + bal['roth-earnings'] + bal.hsa + bal['529'];
-            const curNW = (liquid + realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) * reGrowth), 0) + otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) * oaGrowth), 0) + stockOptions.reduce((s, x) => s + (Math.max(0, (math.fromCurrency(x.currentPrice) * optGrowth - math.fromCurrency(x.strikePrice)) * parseFloat(x.shares))), 0)) - (bal['heloc'] + realEstate.reduce((s, r) => s + Math.max(0, math.fromCurrency(r.mortgage) - (math.fromCurrency(r.principalPayment)*12*i)), 0) + otherAssets.reduce((s, o) => s + Math.max(0, math.fromCurrency(o.loan) - (math.fromCurrency(o.principalPayment)*12*i)), 0) + debts.reduce((s, d) => s + Math.max(0, math.fromCurrency(d.balance) - (math.fromCurrency(d.principalPayment)*12*i)), 0));
+            const curNW = (liquid + realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) * reGrowth), 0) + otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) * oaGrowth), 0) + stockOptions.reduce((s, x) => s + (Math.max(0, (math.fromCurrency(x.currentPrice) * optGrowth - math.fromCurrency(x.strikePrice)) * parseFloat(x.shares))), 0)) - (bal['heloc'] + realEstate.reduce((s, r) => s + Math.max(0, math.fromCurrency(r.mortgage) - (math.fromCurrency(r.principalPayment)*12*i)), 0) + otherAssets.reduce((s, o) => s + Math.max(0, math.fromCurrency(o.loan) - (math.fromCurrency(o.principalPayment)*12*i)), 0) + debts.reduce((s, d) => s + math.fromCurrency(d.balance) - (math.fromCurrency(d.principalPayment)*12*i)), 0);
 
             if (liquid < 1000 && firstInsolvencyAge === null) firstInsolvencyAge = age;
             if (liquid < 1000) status = 'INSOLVENT';
@@ -655,8 +656,6 @@ export const burndown = {
         if (strategyMode === 'PLATINUM') {
             const harvestables = ['taxable', 'crypto', 'metals'];
             columns = [...columns.filter(k => harvestables.includes(k)), ...columns.filter(k => !harvestables.includes(k))];
-            const idxHSA = columns.indexOf('hsa'), idxHELOC = columns.indexOf('heloc');
-            if (idxHSA !== -1 && idxHELOC !== -1 && idxHELOC > idxHSA) { columns.splice(idxHELOC, 1); columns.splice(idxHSA, 0, 'heloc'); }
         }
         const header = `<tr class="sticky top-0 bg-[#1e293b] !text-slate-500 label-std z-20 border-b border-white/5">
             <th class="p-2 w-10 text-center !bg-[#1e293b]">Age</th>
