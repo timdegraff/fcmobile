@@ -515,8 +515,8 @@ export const burndown = {
 
             let baseBudget = config.useSync ? summaries.totalAnnualBudget : config.manualBudget;
             let targetBudget = baseBudget * infFac;
-            
-            // Phase Logic (Retirement Spending Multipliers)
+
+            // Retirement Phases Multiplier
             if (isRet) {
                 let phaseMult = 1.0;
                 if (age < 60) phaseMult = assumptions.phaseGo1 ?? 1.0;
@@ -528,93 +528,52 @@ export const burndown = {
             const helocInterestThisYear = bal['heloc'] * helocInterestRate;
             targetBudget += helocInterestThisYear;
 
-            let floorGross = 0, floorTaxable = 0, incomeBreakdown = [];
+            let floorGross = 0, floorTaxable = 0, incomeBreakdown = [], totalMatched401k = 0;
             let floorGrossTrace = 0, floorDeductionTrace = 0;
             let traceLog = [];
 
-            // === ANNUAL SAVINGS INJECTION ===
-            // 1. Budget Savings (Manual Entries)
+            // 1. INJECT ANNUAL SAVINGS (Post-Growth, Pre-Withdrawal)
             (budget.savings || []).forEach(sav => {
                 if (isRet && !sav.remainsInRetirement) return;
-                
-                // Assume savings grow with inflation to maintain purchasing power relative to income
-                const amount = math.fromCurrency(sav.annual) * infFac;
-                const type = sav.type;
-                
-                // Logic to map savings type to balance buckets
-                if (type === 'Taxable' || type === 'Brokerage') {
-                    bal['taxable'] += amount;
-                    bal['taxableBasis'] += amount;
-                } else if (type === 'Roth IRA') {
-                    bal['roth-basis'] += amount;
-                    // Roth earnings don't increase on contribution
-                } else if (type === 'Cash') {
-                    bal['cash'] += amount;
-                } else if (type === 'HSA') {
-                    bal['hsa'] += amount;
-                } else if (type === 'Crypto') {
-                    bal['crypto'] += amount;
-                    bal['cryptoBasis'] += amount;
-                } else if (type === 'Metals') {
-                    bal['metals'] += amount;
-                    bal['metalsBasis'] += amount;
-                } else if (type === '529') {
-                    bal['529'] += amount;
-                } else if (type === 'Pre-Tax (401k/IRA)') {
-                     bal['401k'] += amount;
-                }
-                
-                traceLog.push(`Saving: Deposited ${math.toCurrency(amount)} into ${type}.`);
+                const amt = math.fromCurrency(sav.annual) * infFac;
+                if (sav.type === 'Taxable') { bal['taxable'] += amt; bal['taxableBasis'] += amt; }
+                else if (sav.type === 'Roth IRA') { bal['roth-basis'] += amt; }
+                else if (sav.type === 'Cash') { bal['cash'] += amt; }
+                else if (sav.type === 'HSA') { bal['hsa'] += amt; }
+                else if (sav.type === 'Crypto') { bal['crypto'] += amt; bal['cryptoBasis'] += amt; }
+                else if (sav.type === 'Metals') { bal['metals'] += amt; bal['metalsBasis'] += amt; }
+                else if (sav.type === '529') { bal['529'] += amt; }
+                else if (sav.type === 'Pre-Tax (401k/IRA)') { bal['401k'] += amt; }
             });
 
             const processIncome = (inc) => {
                 const isMon = inc.isMonthly === true || inc.isMonthly === 'true';
                 let gross = math.fromCurrency(inc.amount) * (isMon ? 12 : 1) * Math.pow(1 + (inc.increase / 100 || 0), i);
+                const bonus = (gross * (parseFloat(inc.bonusPct) / 100 || 0));
                 
-                // === 401k CONTRIBUTION LOGIC ===
-                let contribAmount = 0;
-                if (!isRet) { // Typically stop contributing from W2 in retirement, though user can override via 'remainsInRetirement' logic if needed
-                     const contribPct = parseFloat(inc.contribution) || 0;
-                     const matchPct = parseFloat(inc.match) || 0;
-                     const bonusPct = parseFloat(inc.bonusPct) || 0;
-                     
-                     let bonus = gross * (bonusPct / 100);
-                     let contribBase = gross; 
-                     if (inc.contribOnBonus) contribBase += bonus;
-                     
-                     let rawContrib = contribBase * (contribPct / 100);
-                     
-                     // IRS Limit Check (Simple Annual Cap)
-                     let irsLimit = age >= 50 ? 30000 : 23000; // Hardcoded approximation for future years
-                     // Inflate limits? Typically yes, but usually budget models keep tax bands static or simple
-                     irsLimit *= infFac; 
-                     
-                     contribAmount = Math.min(rawContrib, irsLimit);
-                     
-                     let matchBase = gross;
-                     if (inc.matchOnBonus) matchBase += bonus;
-                     let matchAmount = matchBase * (matchPct / 100);
-                     
-                     bal['401k'] += (contribAmount + matchAmount);
-                     if (contribAmount > 0) {
-                         // traceLog.push(`401k: Contributed ${math.toCurrency(contribAmount)} + ${math.toCurrency(matchAmount)} match.`);
-                     }
+                let personal401k = 0, match401k = 0;
+                if (!isRet) {
+                    const irsLimit = (age >= 50 ? 31000 : 23500) * infFac;
+                    let rawP = (gross * (parseFloat(inc.contribution) / 100 || 0));
+                    if (inc.contribOnBonus) rawP += (bonus * (parseFloat(inc.contribution) / 100 || 0));
+                    personal401k = Math.min(rawP, irsLimit);
+                    
+                    let rawM = (gross * (parseFloat(inc.match) / 100 || 0));
+                    if (inc.matchOnBonus) rawM += (bonus * (parseFloat(inc.match) / 100 || 0));
+                    match401k = rawM;
+                    bal['401k'] += (personal401k + match401k);
                 }
-                
-                // Gross includes bonus for cashflow purposes
-                gross += (gross * (parseFloat(inc.bonusPct) / 100 || 0));
 
                 const isExpMon = inc.incomeExpensesMonthly === true || inc.incomeExpensesMonthly === 'true';
                 let ded = (math.fromCurrency(inc.incomeExpenses) * (isExpMon ? 12 : 1));
                 
-                // Deduct the 401k contribution from available cashflow (Net Source)
-                // This effectively reduces 'floorGross' (Cashflow) AND 'floorTaxable' (Pre-Tax nature)
-                let netSrc = gross - ded - contribAmount;
-                
+                // Surplus Income (Income - Expenses - Contributions) - Treated as spent per user request
+                let netSrc = (gross + bonus) - ded - personal401k; 
+
                 if (isNaN(parseInt(inc.nonTaxableUntil)) || year >= inc.nonTaxableUntil) floorTaxable += netSrc;
                 floorGross += netSrc;
-                floorGrossTrace += gross;
-                floorDeductionTrace += (ded + contribAmount);
+                floorGrossTrace += (gross + bonus);
+                floorDeductionTrace += (ded + personal401k);
                 incomeBreakdown.push({ name: inc.name || 'Income Source', amount: netSrc });
             };
 
@@ -636,38 +595,35 @@ export const burndown = {
             const reGrowth = Math.pow(1 + (assumptions.realEstateGrowth / 100), i);
             const oaGrowth = Math.pow(1 + 0.02, i);
             const optGrowth = Math.pow(1 + (assumptions.stockGrowth / 100), i);
-            const calcNWAtStart = () => {
+            
+            const calcNW = (b) => {
                 const sRE = realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) * reGrowth), 0);
                 const sREDebt = realEstate.reduce((s, r) => s + Math.max(0, math.fromCurrency(r.mortgage) - (math.fromCurrency(r.principalPayment)*12*i)), 0);
                 const sOA = otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) * oaGrowth), 0);
                 const sOADebt = otherAssets.reduce((s, o) => s + Math.max(0, math.fromCurrency(o.loan) - (math.fromCurrency(o.principalPayment)*12*i)), 0);
                 const sOtherDebt = debts.reduce((s, d) => s + Math.max(0, math.fromCurrency(d.balance) - (math.fromCurrency(d.principalPayment)*12*i)), 0);
                 const sOptNW = stockOptions.reduce((s, x) => {
-                    const strike = math.fromCurrency(x.strikePrice);
                     const fmv = math.fromCurrency(x.currentPrice) * optGrowth;
-                    return s + (Math.max(0, (fmv - strike) * parseFloat(x.shares)));
+                    return s + (Math.max(0, (fmv - math.fromCurrency(x.strikePrice)) * parseFloat(x.shares)));
                 }, 0);
-                const sLiquid = startOfYearBal.cash + startOfYearBal.taxable + startOfYearBal.crypto + startOfYearBal.metals + startOfYearBal['401k'] + startOfYearBal['roth-basis'] + startOfYearBal['roth-earnings'] + startOfYearBal.hsa + startOfYearBal['529'];
-                return (sLiquid + sRE + sOA + sOptNW) - (startOfYearBal['heloc'] + sREDebt + sOADebt + sOtherDebt);
+                const sLiquid = b.cash + b.taxable + b.crypto + b.metals + b['401k'] + b['roth-basis'] + b['roth-earnings'] + b.hsa + b['529'];
+                return (sLiquid + sRE + sOA + sOptNW) - (b['heloc'] + sREDebt + sOADebt + sOtherDebt);
             };
-            const startNW = calcNWAtStart();
+
+            const startNW = calcNW(startOfYearBal);
 
             let drawMap = {}, preTaxDraw = 0, taxes = 0, snap = 0, status = 'Silver';
-            // traceLog already initialized
             let observedFriction = 0.25;
-            let smartAdjustments = {}; // PERSISTENT ERROR CORRECTION MEMORY
+            let smartAdjustments = {};
 
             if (!isRet) {
                 taxes = engine.calculateTax(floorTaxable, 0, filingStatus, assumptions.state, infFac);
                 status = 'Active';
                 traceLog.push(`Household generating ${math.toCurrency(floorGrossTrace)} Gross - ${math.toCurrency(floorDeductionTrace)} Deductions = ${math.toCurrency(floorGross)} Net Base Income.`);
-                traceLog.push(`No asset withdrawals required while working. Tax estimated at ${math.toCurrency(taxes)}.`);
             } else {
                 traceLog.push(`Household base income sources: ${incomeBreakdown.map(ib => `${ib.name} (${math.toCurrency(ib.amount)})`).join(', ')}.`);
-                
                 let magiLimit = fpl100 * 4.0; 
                 if (persona === 'PLATINUM') {
-                    traceLog.push(`PLATINUM strategy enabled: Solving for Handout Hunter MAGI ceiling.`);
                     let low = 0, high = 300000 * infFac;
                     for (let j = 0; j < 12; j++) {
                         let mid = (low + high) / 2;
@@ -678,7 +634,6 @@ export const burndown = {
                     traceLog.push(`Determined MAGI Ceiling of ${math.toCurrency(magiLimit)} to protect benefits.`);
                 }
 
-                // 15-PASS SMART CORRECTION SOLVER
                 for (let iter = 0; iter < 15; iter++) {
                     bal = { ...startOfYearBal }; drawMap = {}; preTaxDraw = 0;
                     let curOrdDraw = 0, curLtcgDraw = 0;
@@ -692,31 +647,17 @@ export const burndown = {
                             if (av <= 1) continue;
 
                             let bR = (['taxable', 'crypto', 'metals'].includes(pk) && bal[pk] > 0) ? bal[pk+'Basis'] / bal[pk] : 1;
-                            let st = (stateTaxRates[assumptions.state]?.rate || 0);
+                            let currentDrag = Math.min(0.85, Math.max(0, observedFriction));
+                            let etr = burndown.assetMeta[pk].isTaxable ? (pk === '401k' ? currentDrag : (1 - bR) * (0.15 + (stateTaxRates[assumptions.state]?.rate || 0) + currentDrag)) : 0;
                             
-                            // CALCULATE RAW NEED
-                            let currentDrag = observedFriction;
-                            // Clamp expected friction
-                            currentDrag = Math.min(0.85, Math.max(0, currentDrag));
-                            
-                            let etr = burndown.assetMeta[pk].isTaxable ? (pk === '401k' ? currentDrag : (1 - bR) * (0.15 + st + currentDrag)) : 0;
-                            
-                            // Base calculation from friction
                             let rawDrawNeeded = gap / (1 - Math.max(0, etr));
+                            if (smartAdjustments[pk]) rawDrawNeeded -= smartAdjustments[pk];
                             
-                            // APPLY SMART CORRECTION
-                            // If previous loops overshot, adjustments[pk] will be positive, reducing the draw.
-                            if (smartAdjustments[pk]) {
-                                rawDrawNeeded -= smartAdjustments[pk];
-                            }
-                            
-                            // Strict Priority Rule: In Iron Fist, try to take full needed amount from this account
-                            let adjustmentWeight = (persona === 'RAW') ? 1.0 : (iter >= 10 ? 1.0 : 0.8);
-                            let draw = Math.min(av, Math.max(0, rawDrawNeeded * adjustmentWeight));
+                            let draw = Math.min(av, Math.max(0, rawDrawNeeded * (persona === 'RAW' ? 1.0 : (iter >= 10 ? 1.0 : 0.8))));
                             
                             if (iter === 14 && loggable) {
                                 let msg = `Drawing ${math.toCurrency(draw)} from ${burndown.assetMeta[pk].label}.`;
-                                if (smartAdjustments[pk]) msg += ` (Smart Correction Applied: ${math.toCurrency(-smartAdjustments[pk])})`;
+                                if (smartAdjustments[pk]) msg += ` (Smart Correction Applied)`;
                                 traceLog.push(msg);
                             }
                             
@@ -729,17 +670,13 @@ export const burndown = {
                             if (pk === '401k') curOrdDraw += draw;
                             else if (['taxable', 'crypto', 'metals'].includes(pk)) curLtcgDraw += (draw * (1 - bR));
                             
-                            // If this account didn't fully empty, we ostensibly satisfied the gap. 
-                            // In strict priority, we stop the waterfall here to avoid priority smearing.
                             if (draw < av) break;
                         }
                     };
 
                     if (persona === 'PLATINUM') {
-                        // Platinum Logic (unchanged)
                         for (const pk of ['taxable', 'crypto', 'metals']) {
-                            const currentNetPre = (floorGross + preTaxDraw + snap) - taxes;
-                            const budgetGap = targetBudget - currentNetPre;
+                            const budgetGap = targetBudget - ((floorGross + preTaxDraw + snap) - taxes);
                             if (budgetGap <= 10) break;
                             let curMAGI = floorTaxable + curOrdDraw + curLtcgDraw;
                             if (curMAGI >= magiLimit) break;
@@ -753,8 +690,7 @@ export const burndown = {
                                 drawMap[pk] = (drawMap[pk] || 0) + pull; preTaxDraw += pull; curLtcgDraw += (pull * (1 - bR));
                             }
                         }
-                        const stdRemaining = burndown.priorityOrder.filter(k => !['taxable', 'crypto', 'metals'].includes(k));
-                        solveWaterfall(stdRemaining, iter === 14);
+                        solveWaterfall(burndown.priorityOrder.filter(k => !['taxable', 'crypto', 'metals'].includes(k)), iter === 14);
                     } else {
                         solveWaterfall(burndown.priorityOrder, iter === 14);
                     }
@@ -766,75 +702,30 @@ export const burndown = {
                     const surplus = iterPostTax - targetBudget;
                     const iterError = Math.abs(surplus) / targetBudget;
                     
-                    // SMART CALIBRATION LOGIC
-                    // Calculate observed friction for the next loop's base estimate
-                    if (preTaxDraw > 100) {
-                        const netBenefitProduced = (iterPostTax - (floorGross - engine.calculateTax(floorTaxable, 0, filingStatus, assumptions.state, infFac)));
-                        observedFriction = Math.min(0.9, Math.max(0, 1 - (netBenefitProduced / preTaxDraw)));
-                    }
-
-                    // IDENTIFY MARGINAL ASSET & APPLY CORRECTION
+                    if (preTaxDraw > 100) observedFriction = Math.min(0.9, Math.max(0, 1 - ((iterPostTax - (floorGross - engine.calculateTax(floorTaxable, 0, filingStatus, assumptions.state, infFac))) / preTaxDraw)));
+                    
                     const drawnKeys = Object.keys(drawMap).filter(k => drawMap[k] > 0);
                     const marginalKey = drawnKeys[drawnKeys.length - 1]; 
-                    
                     if (marginalKey && iterError > 0.005) {
-                        // Inverse of (1 - friction) is the Gross-to-Net Multiplier.
-                        // We use the observed global friction as a proxy for the marginal dollar's friction.
-                        const correctionScale = 1 / (1 - observedFriction);
-                        
-                        // If surplus > 0, we drew too much. Correction should be POSITIVE to subtract from draw.
-                        // If surplus < 0, we drew too little. Correction should be NEGATIVE to add to draw (subtracting a negative).
-                        const grossCorrection = surplus * correctionScale;
-                        
-                        // Dampening factor to prevent oscillation around cliffs (Smart Ratio)
-                        const smartRatio = 0.8; 
-                        
-                        smartAdjustments[marginalKey] = (smartAdjustments[marginalKey] || 0) + (grossCorrection * smartRatio);
+                        smartAdjustments[marginalKey] = (smartAdjustments[marginalKey] || 0) + (surplus / (1 - observedFriction) * 0.8);
                     }
-
                     if (iter >= 4 && iterError <= 0.01) break; 
                 }
                 const fMAGI = floorTaxable + (drawMap['401k'] || 0) + ((drawMap['taxable']||0)*(1-(startOfYearBal.taxableBasis/startOfYearBal.taxable||1)));
                 status = (age >= 65 ? 'Medicare' : (fMAGI/fpl100 <= 1.38 ? 'Platinum' : 'Silver'));
-                traceLog.push(`Final Cycle MAGI: ${math.toCurrency(fMAGI)} (${Math.round(fMAGI/fpl100*100)}% FPL). Resulting status: ${status}.`);
+                traceLog.push(`Final Cycle MAGI: ${math.toCurrency(fMAGI)} (${status}).`);
             }
 
             const postTaxInc = (floorGross + preTaxDraw + snap) - taxes;
-            const shortfall = targetBudget - postTaxInc;
-
-            if (isRet) {
-                if (shortfall > (targetBudget * 0.02)) {
-                    status = 'INSOLVENT';
-                    if (firstInsolvencyAge === null) firstInsolvencyAge = age;
-                } else if ((postTaxInc - targetBudget) > (targetBudget * 0.05) && preTaxDraw > 100) {
-                    status = 'ERROR';
-                }
+            if (isRet && (targetBudget - postTaxInc) > (targetBudget * 0.02)) {
+                status = 'INSOLVENT';
+                if (firstInsolvencyAge === null) firstInsolvencyAge = age;
             }
-            
-            // Apply Asset Growth (APY) to remaining balances for year-end
+
+            // APY: APPLIED AT YEAR END TO REMAINING BALANCES
             const stockGrowth = math.getGrowthForAge('Stock', age, assumptions.currentAge, assumptions);
             const cryptoGrowth = math.getGrowthForAge('Crypto', age, assumptions.currentAge, assumptions);
             const metalsGrowth = math.getGrowthForAge('Metals', age, assumptions.currentAge, assumptions);
-
-            bal['taxable'] *= (1 + stockGrowth);
-            bal['401k'] *= (1 + stockGrowth);
-            bal['hsa'] *= (1 + stockGrowth);
-            bal['529'] *= (1 + stockGrowth);
-            bal['crypto'] *= (1 + cryptoGrowth);
-            bal['metals'] *= (1 + metalsGrowth);
-            
-            // Roth: Growth accumulates in earnings
-            const totalRoth = bal['roth-basis'] + bal['roth-earnings'];
-            bal['roth-earnings'] += (totalRoth * stockGrowth);
-            
-            // Calculate detailed NW Breakdown for trace
-            const curREEquity = realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) * reGrowth) - Math.max(0, math.fromCurrency(r.mortgage) - (math.fromCurrency(r.principalPayment)*12*i)), 0);
-            const curOAEquity = otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) * oaGrowth) - Math.max(0, math.fromCurrency(o.loan) - (math.fromCurrency(o.principalPayment)*12*i)), 0);
-            const curPEVal = stockOptions.reduce((s, x) => s + (Math.max(0, (math.fromCurrency(x.currentPrice) * optGrowth - math.fromCurrency(x.strikePrice)) * parseFloat(x.shares))), 0);
-            const curDebtBal = debts.reduce((s, d) => s + Math.max(0, math.fromCurrency(d.balance) - (math.fromCurrency(d.principalPayment)*12*i)), 0);
-
-            const liquid = bal.cash + bal.taxable + bal.crypto + bal.metals + bal['401k'] + bal['roth-basis'] + bal['roth-earnings'] + bal.hsa + bal['529'];
-            const curNW = (liquid + realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) * reGrowth), 0) + otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) * oaGrowth), 0) + stockOptions.reduce((s, x) => s + (Math.max(0, (math.fromCurrency(x.currentPrice) * optGrowth - math.fromCurrency(x.strikePrice)) * parseFloat(x.shares))), 0)) - (bal['heloc'] + realEstate.reduce((s, r) => s + Math.max(0, math.fromCurrency(r.mortgage) - (math.fromCurrency(r.principalPayment)*12*i)), 0) + otherAssets.reduce((s, o) => s + Math.max(0, math.fromCurrency(o.loan) - (math.fromCurrency(o.principalPayment)*12*i)), 0) + debts.reduce((s, d) => s + math.fromCurrency(d.balance) - (math.fromCurrency(d.principalPayment)*12*i)), 0);
 
             const nwBreakdown = [
                 { name: 'Cash', value: bal['cash'], color: assetColors['Cash'] },
@@ -844,19 +735,20 @@ export const burndown = {
                 { name: 'Bitcoin', value: bal['crypto'], color: assetColors['Crypto'] },
                 { name: 'Metals', value: bal['metals'], color: assetColors['Metals'] },
                 { name: 'HSA', value: bal['hsa'], color: assetColors['HSA'] },
-                { name: '529 Plan', value: bal['529'], color: assetColors['529'] },
-                { name: 'Real Estate Equity', value: curREEquity, color: assetColors['Real Estate'] },
-                { name: 'Other Assets Equity', value: curOAEquity, color: assetColors['Other'] },
-                { name: 'Stock Options', value: curPEVal, color: assetColors['Stock Options'] },
-                { name: 'HELOC Debt', value: -bal['heloc'], color: assetColors['HELOC'] },
-                { name: 'Other Debt', value: -curDebtBal, color: assetColors['Debt'] }
+                { name: '529 Plan', value: bal['529'], color: assetColors['529'] }
             ];
 
             results.push({ 
                 age, year, budget: targetBudget, helocInt: helocInterestThisYear, isFirstRetYear: age === rAge, 
-                preTaxDraw, taxes, snap, balances: { ...bal }, draws: drawMap, postTaxInc, status, 
-                netWorth: curNW, startNW, floorGross, incomeBreakdown, traceLog, nwBreakdown
+                preTaxDraw, taxes, snap, balances: { ...startOfYearBal }, draws: drawMap, postTaxInc, status, 
+                netWorth: calcNW(bal), startNW, floorGross, incomeBreakdown, traceLog, nwBreakdown
             });
+
+            // Apply growth for NEXT year
+            ['taxable', '401k', 'hsa', '529'].forEach(k => bal[k] *= (1 + stockGrowth));
+            bal['crypto'] *= (1 + cryptoGrowth);
+            bal['metals'] *= (1 + metalsGrowth);
+            bal['roth-earnings'] += ((bal['roth-basis'] + bal['roth-earnings']) * stockGrowth);
         }
         return results;
     },
@@ -873,32 +765,29 @@ export const burndown = {
             <th class="p-2 w-10 text-center !bg-[#1e293b]">Age</th>
             <th class="p-2 text-center !bg-[#1e293b]">Budget</th>
             <th class="p-2 text-center !bg-[#1e293b]">Status</th>
-            <th class="p-2 text-center !bg-[#1e293b] text-teal-400">Cashflow</th>
+            <th class="p-2 text-center !bg-[#1e293b] text-teal-400">Income</th>
             <th class="p-2 text-center !bg-[#1e293b] text-emerald-500">Aid</th>
             <th class="p-2 text-center !bg-[#1e293b] text-orange-400">Gap</th>
             <th class="p-2 text-center !bg-[#1e293b]">Gross Draw</th>
-            <th class="p-2 text-center !bg-[#1e293b]">Tax Paid</th>
+            <th class="p-2 text-center !bg-[#1e293b]">Tax</th>
             ${columns.map(k => `<th class="p-2 text-center !bg-[#1e293b] text-[7px]" style="color:${burndown.assetMeta[k].color}">${burndown.assetMeta[k].short}</th>`).join('')}
-            <th class="p-2 text-center !bg-[#1e293b]">Post-Tax Inc</th>
             <th class="p-2 text-center !bg-[#1e293b] text-teal-400">Net Worth</th>
         </tr>`;
         const rows = results.map((r, i) => {
             const inf = isRealDollars ? Math.pow(1 + infRate, i) : 1;
             const formatVal = (v) => math.toSmartCompactCurrency(v / inf);
-            let badgeClass = r.status === 'INSOLVENT' || r.status === 'ERROR' ? 'bg-red-600 text-white' : (r.status === 'Platinum' ? 'bg-emerald-500 text-white' : (r.status === 'Active' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-400'));
+            let badgeClass = r.status === 'INSOLVENT' ? 'bg-red-600 text-white' : (r.status === 'Platinum' ? 'bg-emerald-500 text-white' : (r.status === 'Active' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-400'));
             const assetGap = Math.max(0, r.budget - r.floorGross - r.snap);
-            const isInsolvent = r.status === 'INSOLVENT';
-            return `<tr class="border-b border-white/5 hover:bg-white/5 text-[9px] ${r.status === 'ERROR' ? 'bg-red-900/10' : ''}">
+            return `<tr class="border-b border-white/5 hover:bg-white/5 text-[9px]">
                 <td class="p-2 text-center font-bold">${r.age}</td>
-                <td class="p-2 text-center"><div class="${r.isFirstRetYear ? 'text-white' : 'text-slate-400'}">${formatVal(r.budget)}</div>${r.isFirstRetYear ? '<div class="text-[7px] font-black text-amber-500 uppercase leading-none mt-0.5">Ret Year</div>' : ''}${r.helocInt > 10 ? `<div class="text-[7px] font-black text-orange-400 uppercase leading-none mt-0.5">+${formatVal(r.helocInt)} HELOC INT</div>` : ''}</td>
-                <td class="p-2 text-center"><span class="px-2 py-0.5 rounded-[4px] text-[7px] font-black uppercase tracking-wider ${badgeClass}">${r.status}</span></td>
+                <td class="p-2 text-center"><div class="${r.isFirstRetYear ? 'text-white' : 'text-slate-400'}">${formatVal(r.budget)}</div></td>
+                <td class="p-2 text-center"><span class="px-2 py-0.5 rounded-[4px] text-[7px] font-black uppercase ${badgeClass}">${r.status}</span></td>
                 <td class="p-2 text-center text-teal-400 font-bold">${formatVal(r.floorGross)}</td>
                 <td class="p-2 text-center text-emerald-500 font-bold">${formatVal(r.snap)}</td>
-                <td class="p-2 text-center ${isInsolvent ? 'text-red-500' : 'text-orange-400'} font-black">${formatVal(assetGap)}</td>
+                <td class="p-2 text-center text-orange-400 font-black">${formatVal(assetGap)}</td>
                 <td class="p-2 text-center text-white font-bold">${formatVal(r.preTaxDraw)}</td>
                 <td class="p-2 text-center text-red-400 font-bold">${formatVal(r.taxes)}</td>
                 ${columns.map(k => `<td class="p-1.5 text-center leading-tight"><div class="font-black" style="color: ${r.draws[k] > 0 ? burndown.assetMeta[k].color : '#475569'}">${r.draws[k] > 1 ? formatVal(r.draws[k]) : '$0'}</div><div class="text-slate-600 text-[7px] font-bold">${formatVal(r.balances[k] || 0)}</div></td>`).join('')}
-                <td class="p-2 text-center font-black text-white">${formatVal(r.postTaxInc)}</td>
                 <td class="p-2 text-center font-black text-teal-400 bg-teal-400/5">${math.toSmartCompactCurrency(r.netWorth / inf)}</td>
             </tr>`;
         }).join('');

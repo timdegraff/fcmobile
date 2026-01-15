@@ -3,8 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
 */
 
-//Vibe coded by ammaar@google.com
-
 import { GoogleGenAI } from '@google/genai';
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import ReactDOM from 'react-dom/client';
