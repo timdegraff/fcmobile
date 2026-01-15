@@ -578,29 +578,36 @@ export const burndown = {
                             let bR = (['taxable', 'crypto', 'metals'].includes(pk) && bal[pk] > 0) ? bal[pk+'Basis'] / bal[pk] : 1;
                             let st = (stateTaxRates[assumptions.state]?.rate || 0);
                             
-                            // High precision friction resolver starting at Loop 5
+                            // WHOLE-GAP PRE-FLIGHT RESOLVER (New for strict priority)
                             let currentDrag = observedFriction;
-                            if (iter >= 5 || iter < 2) {
-                                const microTest = 100;
-                                const tB = engine.calculateTax(floorTaxable + curOrdDraw, curLtcgDraw, filingStatus, assumptions.state, infFac);
-                                const sB = engine.calculateSnapBenefit((floorTaxable + curOrdDraw)/12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
+                            if (iter >= 2) {
+                                // Simulate tax/benefit impact for the ENTIRE current gap to avoid priority smearing
+                                const testOrdBase = floorTaxable + curOrdDraw;
+                                const testLtcgBase = curLtcgDraw;
                                 
-                                const tT = engine.calculateTax(floorTaxable + curOrdDraw + microTest, curLtcgDraw, filingStatus, assumptions.state, infFac);
-                                const sT = engine.calculateSnapBenefit((floorTaxable + curOrdDraw + microTest)/12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
+                                const tB = engine.calculateTax(testOrdBase, testLtcgBase, filingStatus, assumptions.state, infFac);
+                                const sB = engine.calculateSnapBenefit(testOrdBase/12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
                                 
-                                currentDrag = ((tT - tB) + (sB - sT)) / microTest;
+                                // Iron Fist Calibration: Check impact of closing the gap specifically using this asset type
+                                const simulatedGrossNeeded = gap / (1 - observedFriction);
+                                const testOrdTarget = testOrdBase + (pk === '401k' ? simulatedGrossNeeded : 0);
+                                const testLtcgTarget = testLtcgBase + (['taxable', 'crypto', 'metals'].includes(pk) ? simulatedGrossNeeded * (1-bR) : 0);
+                                
+                                const tT = engine.calculateTax(testOrdTarget, testLtcgTarget, filingStatus, assumptions.state, infFac);
+                                const sT = engine.calculateSnapBenefit(testOrdTarget/12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
+                                
+                                const netLoss = (tT - tB) + (sB - sT);
+                                currentDrag = netLoss / Math.max(1, simulatedGrossNeeded);
                             }
 
-                            // Dynamic clamping to prevent tax death spirals
                             currentDrag = Math.min(0.85, Math.max(0, currentDrag));
-                            
                             let etr = burndown.assetMeta[pk].isTaxable ? (pk === '401k' ? currentDrag : (1 - bR) * (0.15 + st + currentDrag)) : 0;
                             
-                            // Damped adjustments in middle loops
-                            let adjustmentWeight = (iter >= 10) ? 1.0 : 0.8;
+                            // Strict Priority Rule: 100% weight in Iron Fist to deplete fully before next account
+                            let adjustmentWeight = (persona === 'RAW') ? 1.0 : (iter >= 10 ? 1.0 : 0.8);
                             let draw = Math.min(av, (gap / (1 - Math.max(0, etr))) * adjustmentWeight);
                             
-                            if (iter === 14 && loggable) traceLog.push(`Drawing ${math.toCurrency(draw)} from ${burndown.assetMeta[pk].label}. Actual drag calibrated at ${Math.round(etr*100)}%. Remaining gap: ${math.toCurrency(gap-draw)}`);
+                            if (iter === 14 && loggable) traceLog.push(`Drawing ${math.toCurrency(draw)} from ${burndown.assetMeta[pk].label}. Marginal drag calibrated at ${Math.round(etr*100)}%. Remaining gap: ${math.toCurrency(gap-draw)}`);
                             
                             if (pk === 'heloc') bal['heloc'] += draw;
                             else {
@@ -610,6 +617,10 @@ export const burndown = {
                             drawMap[pk] = (drawMap[pk] || 0) + draw; preTaxDraw += draw;
                             if (pk === '401k') curOrdDraw += draw;
                             else if (['taxable', 'crypto', 'metals'].includes(pk)) curLtcgDraw += (draw * (1 - bR));
+                            
+                            // If this account didn't fully empty, we satisfied the whole weighted gap. 
+                            // In strict priority, we stop the waterfall here for this iteration to avoid smears.
+                            if (draw < av) break;
                         }
                     };
 
@@ -636,21 +647,18 @@ export const burndown = {
                         solveWaterfall(burndown.priorityOrder, iter === 14);
                     }
                     
-                    const lastNetInc = (floorGross + preTaxDraw + snap) - taxes;
                     taxes = engine.calculateTax(floorTaxable + curOrdDraw, curLtcgDraw, filingStatus, assumptions.state, infFac);
                     snap = engine.calculateSnapBenefit((floorTaxable + curOrdDraw) / 12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
 
                     const iterPostTax = (floorGross + preTaxDraw + snap) - taxes;
                     const iterError = Math.abs(iterPostTax - targetBudget) / targetBudget;
                     
-                    // Calibration: Calculate real friction from previous step
-                    if (preTaxDraw > 500) {
+                    if (preTaxDraw > 100) {
                         const netBenefitProduced = (iterPostTax - (floorGross - engine.calculateTax(floorTaxable, 0, filingStatus, assumptions.state, infFac)));
                         observedFriction = Math.min(0.9, Math.max(0, 1 - (netBenefitProduced / preTaxDraw)));
                     }
 
                     if (iter >= 4 && iterError <= 0.01) break; 
-                    if (iter >= 10 && iterError <= 0.02) break;
                 }
                 const fMAGI = floorTaxable + (drawMap['401k'] || 0) + ((drawMap['taxable']||0)*(1-(startOfYearBal.taxableBasis/startOfYearBal.taxable||1)));
                 status = (age >= 65 ? 'Medicare' : (fMAGI/fpl100 <= 1.38 ? 'Platinum' : 'Silver'));
@@ -666,7 +674,7 @@ export const burndown = {
             bal['529'] *= (1 + stockGrowth);
             
             const liquid = bal.cash + bal.taxable + bal.crypto + bal.metals + bal['401k'] + bal['roth-basis'] + bal['roth-earnings'] + bal.hsa + bal['529'];
-            const curNW = (liquid + realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) * reGrowth), 0) + otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) * oaGrowth), 0) + stockOptions.reduce((s, x) => s + (Math.max(0, (math.fromCurrency(x.currentPrice) * optGrowth - math.fromCurrency(x.strikePrice)) * parseFloat(x.shares))), 0)) - (bal['heloc'] + realEstate.reduce((s, r) => s + Math.max(0, math.fromCurrency(r.mortgage) - (math.fromCurrency(r.principalPayment)*12*i)), 0) + otherAssets.reduce((s, o) => s + Math.max(0, math.fromCurrency(o.loan) - (math.fromCurrency(o.principalPayment)*12*i)), 0) + debts.reduce((s, d) => s + Math.max(0, math.fromCurrency(d.balance) - (math.fromCurrency(d.principalPayment)*12*i)), 0));
+            const curNW = (liquid + realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) * reGrowth), 0) + otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) * oaGrowth), 0) + stockOptions.reduce((s, x) => s + (Math.max(0, (math.fromCurrency(x.currentPrice) * optGrowth - math.fromCurrency(x.strikePrice)) * parseFloat(x.shares))), 0)) - (bal['heloc'] + realEstate.reduce((s, r) => s + Math.max(0, math.fromCurrency(r.mortgage) - (math.fromCurrency(r.principalPayment)*12*i)), 0) + otherAssets.reduce((s, o) => s + Math.max(0, math.fromCurrency(o.loan) - (math.fromCurrency(o.principalPayment)*12*i)), 0) + debts.reduce((s, d) => s + math.fromCurrency(d.balance) - (math.fromCurrency(d.principalPayment)*12*i)), 0);
 
             if (liquid < 1000 && firstInsolvencyAge === null) firstInsolvencyAge = age;
             if (liquid < 1000) status = 'INSOLVENT';
