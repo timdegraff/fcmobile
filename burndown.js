@@ -431,6 +431,7 @@ export const burndown = {
             'metals': investments.filter(i => i.type === 'Metals').reduce((s, i) => s + math.fromCurrency(i.value), 0),
             'metalsBasis': investments.filter(i => i.type === 'Metals').reduce((s, i) => s + math.fromCurrency(i.costBasis), 0),
             'hsa': investments.filter(i => i.type === 'HSA').reduce((s, i) => s + math.fromCurrency(i.value), 0),
+            '529': investments.filter(i => i.type === '529').reduce((s, i) => s + math.fromCurrency(i.value), 0),
             'heloc': helocs.reduce((s, h) => s + math.fromCurrency(h.balance), 0)
         };
 
@@ -500,7 +501,7 @@ export const burndown = {
                     const fmv = math.fromCurrency(x.currentPrice) * optGrowth;
                     return s + (Math.max(0, (fmv - strike) * parseFloat(x.shares)));
                 }, 0);
-                const sLiquid = startOfYearBal.cash + startOfYearBal.taxable + startOfYearBal.crypto + startOfYearBal.metals + startOfYearBal['401k'] + startOfYearBal['roth-basis'] + startOfYearBal['roth-earnings'] + startOfYearBal.hsa;
+                const sLiquid = startOfYearBal.cash + startOfYearBal.taxable + startOfYearBal.crypto + startOfYearBal.metals + startOfYearBal['401k'] + startOfYearBal['roth-basis'] + startOfYearBal['roth-earnings'] + startOfYearBal.hsa + startOfYearBal['529'];
                 return (sLiquid + sRE + sOA + sOptNW) - (startOfYearBal['heloc'] + sREDebt + sOADebt + sOtherDebt);
             };
             const startNW = calcNWAtStart();
@@ -620,7 +621,11 @@ export const burndown = {
                 status = 'ERROR';
             }
             
-            const liquid = bal.cash + bal.taxable + bal.crypto + bal.metals + bal['401k'] + bal['roth-basis'] + bal['roth-earnings'] + bal.hsa;
+            // Grow 529 asset using stock growth rate (consistent with sidebar summary behavior)
+            const stockGrowth = math.getGrowthForAge('Stock', age, assumptions.currentAge, assumptions);
+            bal['529'] *= (1 + stockGrowth);
+            
+            const liquid = bal.cash + bal.taxable + bal.crypto + bal.metals + bal['401k'] + bal['roth-basis'] + bal['roth-earnings'] + bal.hsa + bal['529'];
             const curNW = (liquid + realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) * reGrowth), 0) + otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) * oaGrowth), 0) + stockOptions.reduce((s, x) => s + (Math.max(0, (math.fromCurrency(x.currentPrice) * optGrowth - math.fromCurrency(x.strikePrice)) * parseFloat(x.shares))), 0)) - (bal['heloc'] + realEstate.reduce((s, r) => s + Math.max(0, math.fromCurrency(r.mortgage) - (math.fromCurrency(r.principalPayment)*12*i)), 0) + otherAssets.reduce((s, o) => s + Math.max(0, math.fromCurrency(o.loan) - (math.fromCurrency(o.principalPayment)*12*i)), 0) + debts.reduce((s, d) => s + Math.max(0, math.fromCurrency(d.balance) - (math.fromCurrency(d.principalPayment)*12*i)), 0));
 
             if (liquid < 1000 && firstInsolvencyAge === null) firstInsolvencyAge = age;
