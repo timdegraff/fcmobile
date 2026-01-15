@@ -706,10 +706,8 @@ export const burndown = {
             }
 
             const postTaxInc = (floorGross + preTaxDraw + snap) - taxes;
-            if (isRet && status !== 'INSOLVENT') {
-                if ((targetBudget - postTaxInc) > 50) {
-                    status = 'INSOLVENT';
-                } else if ((postTaxInc - targetBudget) > (targetBudget * 0.05) && preTaxDraw > 100) {
+            if (isRet && status !== 'ERROR') {
+                if ((postTaxInc - targetBudget) > (targetBudget * 0.05) && preTaxDraw > 100) {
                     status = 'ERROR';
                 }
             }
@@ -717,14 +715,13 @@ export const burndown = {
             const stockGrowth = math.getGrowthForAge('Stock', age, assumptions.currentAge, assumptions);
             bal['529'] *= (1 + stockGrowth);
             
-            const liquid = bal.cash + bal.taxable + bal.crypto + bal.metals + bal['401k'] + bal['roth-basis'] + bal['roth-earnings'] + bal.hsa + bal['529'];
-            
             // Calculate detailed NW Breakdown for trace
             const curREEquity = realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) * reGrowth) - Math.max(0, math.fromCurrency(r.mortgage) - (math.fromCurrency(r.principalPayment)*12*i)), 0);
             const curOAEquity = otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) * oaGrowth) - Math.max(0, math.fromCurrency(o.loan) - (math.fromCurrency(o.principalPayment)*12*i)), 0);
             const curPEVal = stockOptions.reduce((s, x) => s + (Math.max(0, (math.fromCurrency(x.currentPrice) * optGrowth - math.fromCurrency(x.strikePrice)) * parseFloat(x.shares))), 0);
             const curDebtBal = debts.reduce((s, d) => s + Math.max(0, math.fromCurrency(d.balance) - (math.fromCurrency(d.principalPayment)*12*i)), 0);
 
+            const liquid = bal.cash + bal.taxable + bal.crypto + bal.metals + bal['401k'] + bal['roth-basis'] + bal['roth-earnings'] + bal.hsa + bal['529'];
             const curNW = (liquid + realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) * reGrowth), 0) + otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) * oaGrowth), 0) + stockOptions.reduce((s, x) => s + (Math.max(0, (math.fromCurrency(x.currentPrice) * optGrowth - math.fromCurrency(x.strikePrice)) * parseFloat(x.shares))), 0)) - (bal['heloc'] + realEstate.reduce((s, r) => s + Math.max(0, math.fromCurrency(r.mortgage) - (math.fromCurrency(r.principalPayment)*12*i)), 0) + otherAssets.reduce((s, o) => s + Math.max(0, math.fromCurrency(o.loan) - (math.fromCurrency(o.principalPayment)*12*i)), 0) + debts.reduce((s, d) => s + math.fromCurrency(d.balance) - (math.fromCurrency(d.principalPayment)*12*i)), 0);
 
             const nwBreakdown = [
@@ -743,8 +740,16 @@ export const burndown = {
                 { name: 'Other Debt', value: -curDebtBal, color: assetColors['Debt'] }
             ];
 
-            if ((liquid < 1000 || status === 'INSOLVENT') && firstInsolvencyAge === null) firstInsolvencyAge = age;
-            if (liquid < 1000) status = 'INSOLVENT';
+            // INSOLVENCY DEFINITION: Depletion of all prioritized drawable assets (available balance < $500)
+            const liquidAvailable = burndown.priorityOrder.reduce((sum, pk) => {
+                const av = (pk === 'cash' ? Math.max(0, bal[pk] - cashFloor) : (pk === 'heloc' ? Math.max(0, helocLimit - bal[pk]) : bal[pk]));
+                return sum + av;
+            }, 0);
+
+            if (liquidAvailable < 500) {
+                status = 'INSOLVENT';
+                if (firstInsolvencyAge === null) firstInsolvencyAge = age;
+            }
 
             results.push({ 
                 age, year, budget: targetBudget, helocInt: helocInterestThisYear, isFirstRetYear: age === rAge, 
