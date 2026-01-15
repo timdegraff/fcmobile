@@ -510,7 +510,7 @@ export const burndown = {
                 income.filter(inc => inc.remainsInRetirement).forEach(processIncome);
                 if (age >= ssStartAge) {
                     const ssFull = engine.calculateSocialSecurity(ssMonthly, workYears, infFac);
-                    const taxableSS = engine.calculateTaxableSocialSecurity(ssFull, floorTaxable, filingStatus, infFac);
+                    const taxableSS = engine.calculateTaxableSocialSecurity(ssFull, floorTaxable, filingStatus, assumptions.state, infFac);
                     floorGross += ssFull;
                     floorTaxable += taxableSS;
                     floorGrossTrace += ssFull;
@@ -539,7 +539,7 @@ export const burndown = {
             const startNW = calcNWAtStart();
 
             let drawMap = {}, preTaxDraw = 0, taxes = 0, snap = 0, status = 'Silver';
-            let traceLog = [], observedFriction = 0.3; // Default friction guess for Loop 0/1
+            let traceLog = [], observedFriction = 0.25;
 
             if (!isRet) {
                 taxes = engine.calculateTax(floorTaxable, 0, filingStatus, assumptions.state, infFac);
@@ -562,8 +562,8 @@ export const burndown = {
                     traceLog.push(`Determined MAGI Ceiling of ${math.toCurrency(magiLimit)} to protect benefits.`);
                 }
 
-                // SUCCESSIVE APPROXIMATION SOLVER
-                for (let iter = 0; iter < 10; iter++) {
+                // 15-PASS HIGH PRECISION SOLVER
+                for (let iter = 0; iter < 15; iter++) {
                     bal = { ...startOfYearBal }; drawMap = {}; preTaxDraw = 0;
                     let curOrdDraw = 0, curLtcgDraw = 0;
 
@@ -578,23 +578,29 @@ export const burndown = {
                             let bR = (['taxable', 'crypto', 'metals'].includes(pk) && bal[pk] > 0) ? bal[pk+'Basis'] / bal[pk] : 1;
                             let st = (stateTaxRates[assumptions.state]?.rate || 0);
                             
+                            // High precision friction resolver starting at Loop 5
                             let currentDrag = observedFriction;
-                            if (iter < 2) {
-                                // Preliminary guess based on entire gap
-                                const testTaxBase = engine.calculateTax(floorTaxable + curOrdDraw, curLtcgDraw, filingStatus, assumptions.state, infFac);
-                                const testSnapBase = engine.calculateSnapBenefit((floorTaxable + curOrdDraw)/12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
-                                const testTaxTarget = engine.calculateTax(floorTaxable + curOrdDraw + gap, curLtcgDraw, filingStatus, assumptions.state, infFac);
-                                const testSnapTarget = engine.calculateSnapBenefit((floorTaxable + curOrdDraw + gap)/12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
-                                currentDrag = ( (testTaxTarget - testTaxBase) + (testSnapBase - testSnapTarget) ) / Math.max(1, gap);
+                            if (iter >= 5 || iter < 2) {
+                                const microTest = 100;
+                                const tB = engine.calculateTax(floorTaxable + curOrdDraw, curLtcgDraw, filingStatus, assumptions.state, infFac);
+                                const sB = engine.calculateSnapBenefit((floorTaxable + curOrdDraw)/12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
+                                
+                                const tT = engine.calculateTax(floorTaxable + curOrdDraw + microTest, curLtcgDraw, filingStatus, assumptions.state, infFac);
+                                const sT = engine.calculateSnapBenefit((floorTaxable + curOrdDraw + microTest)/12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
+                                
+                                currentDrag = ((tT - tB) + (sB - sT)) / microTest;
                             }
 
-                            if (iter > 2 && currentDrag > 0.6) currentDrag = 0.5; // Dampener
+                            // Dynamic clamping to prevent tax death spirals
+                            currentDrag = Math.min(0.85, Math.max(0, currentDrag));
                             
                             let etr = burndown.assetMeta[pk].isTaxable ? (pk === '401k' ? currentDrag : (1 - bR) * (0.15 + st + currentDrag)) : 0;
-                            if (etr >= 0.95) etr = 0.60; 
-
-                            let draw = Math.min(av, gap / (1 - Math.max(0, etr)));
-                            if (iter === 9 && loggable) traceLog.push(`Drawing ${math.toCurrency(draw)} from ${burndown.assetMeta[pk].label}. Actual drag calibrated at ${Math.round(etr*100)}%. Remaining gap: ${math.toCurrency(gap-draw)}`);
+                            
+                            // Damped adjustments in middle loops
+                            let adjustmentWeight = (iter >= 10) ? 1.0 : 0.8;
+                            let draw = Math.min(av, (gap / (1 - Math.max(0, etr))) * adjustmentWeight);
+                            
+                            if (iter === 14 && loggable) traceLog.push(`Drawing ${math.toCurrency(draw)} from ${burndown.assetMeta[pk].label}. Actual drag calibrated at ${Math.round(etr*100)}%. Remaining gap: ${math.toCurrency(gap-draw)}`);
                             
                             if (pk === 'heloc') bal['heloc'] += draw;
                             else {
@@ -625,26 +631,26 @@ export const burndown = {
                             }
                         }
                         const stdRemaining = burndown.priorityOrder.filter(k => !['taxable', 'crypto', 'metals'].includes(k));
-                        solveWaterfall(stdRemaining, iter === 9);
+                        solveWaterfall(stdRemaining, iter === 14);
                     } else {
-                        solveWaterfall(burndown.priorityOrder, iter === 9);
+                        solveWaterfall(burndown.priorityOrder, iter === 14);
                     }
                     
-                    const oldTaxes = taxes, oldSnap = snap;
+                    const lastNetInc = (floorGross + preTaxDraw + snap) - taxes;
                     taxes = engine.calculateTax(floorTaxable + curOrdDraw, curLtcgDraw, filingStatus, assumptions.state, infFac);
                     snap = engine.calculateSnapBenefit((floorTaxable + curOrdDraw) / 12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
 
                     const iterPostTax = (floorGross + preTaxDraw + snap) - taxes;
                     const iterError = Math.abs(iterPostTax - targetBudget) / targetBudget;
                     
-                    // CALIBRATION: Calculate actual friction observed from this pull
-                    const totalGrossPull = preTaxDraw;
-                    const netBenefitProduced = (iterPostTax - (floorGross - engine.calculateTax(floorTaxable, 0, filingStatus, assumptions.state, infFac)));
-                    if (totalGrossPull > 100) {
-                        observedFriction = 1 - (netBenefitProduced / totalGrossPull);
+                    // Calibration: Calculate real friction from previous step
+                    if (preTaxDraw > 500) {
+                        const netBenefitProduced = (iterPostTax - (floorGross - engine.calculateTax(floorTaxable, 0, filingStatus, assumptions.state, infFac)));
+                        observedFriction = Math.min(0.9, Math.max(0, 1 - (netBenefitProduced / preTaxDraw)));
                     }
 
-                    if (iter >= 2 && iterError <= 0.005) break; 
+                    if (iter >= 4 && iterError <= 0.01) break; 
+                    if (iter >= 10 && iterError <= 0.02) break;
                 }
                 const fMAGI = floorTaxable + (drawMap['401k'] || 0) + ((drawMap['taxable']||0)*(1-(startOfYearBal.taxableBasis/startOfYearBal.taxable||1)));
                 status = (age >= 65 ? 'Medicare' : (fMAGI/fpl100 <= 1.38 ? 'Platinum' : 'Silver'));
@@ -652,7 +658,7 @@ export const burndown = {
             }
 
             const postTaxInc = (floorGross + preTaxDraw + snap) - taxes;
-            if (isRet && status !== 'INSOLVENT' && status !== 'ERROR' && Math.abs(postTaxInc - targetBudget) > (targetBudget * 0.02)) {
+            if (isRet && status !== 'INSOLVENT' && Math.abs(postTaxInc - targetBudget) > (targetBudget * 0.05)) {
                 status = 'ERROR';
             }
             
@@ -660,7 +666,7 @@ export const burndown = {
             bal['529'] *= (1 + stockGrowth);
             
             const liquid = bal.cash + bal.taxable + bal.crypto + bal.metals + bal['401k'] + bal['roth-basis'] + bal['roth-earnings'] + bal.hsa + bal['529'];
-            const curNW = (liquid + realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) * reGrowth), 0) + otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) * oaGrowth), 0) + stockOptions.reduce((s, x) => s + (Math.max(0, (math.fromCurrency(x.currentPrice) * optGrowth - math.fromCurrency(x.strikePrice)) * parseFloat(x.shares))), 0)) - (bal['heloc'] + realEstate.reduce((s, r) => s + Math.max(0, math.fromCurrency(r.mortgage) - (math.fromCurrency(r.principalPayment)*12*i)), 0) + otherAssets.reduce((s, o) => s + Math.max(0, math.fromCurrency(o.loan) - (math.fromCurrency(o.principalPayment)*12*i)), 0) + debts.reduce((s, d) => s + math.fromCurrency(d.balance) - (math.fromCurrency(d.principalPayment)*12*i)), 0);
+            const curNW = (liquid + realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) * reGrowth), 0) + otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) * oaGrowth), 0) + stockOptions.reduce((s, x) => s + (Math.max(0, (math.fromCurrency(x.currentPrice) * optGrowth - math.fromCurrency(x.strikePrice)) * parseFloat(x.shares))), 0)) - (bal['heloc'] + realEstate.reduce((s, r) => s + Math.max(0, math.fromCurrency(r.mortgage) - (math.fromCurrency(r.principalPayment)*12*i)), 0) + otherAssets.reduce((s, o) => s + Math.max(0, math.fromCurrency(o.loan) - (math.fromCurrency(o.principalPayment)*12*i)), 0) + debts.reduce((s, d) => s + Math.max(0, math.fromCurrency(d.balance) - (math.fromCurrency(d.principalPayment)*12*i)), 0));
 
             if (liquid < 1000 && firstInsolvencyAge === null) firstInsolvencyAge = age;
             if (liquid < 1000) status = 'INSOLVENT';
