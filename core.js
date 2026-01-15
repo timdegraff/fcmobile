@@ -1,3 +1,4 @@
+
 /** FIRECalc Stable v4.1.2 - Production Build **/
 import { signInWithGoogle, logoutUser } from './auth.js';
 import { templates } from './templates.js';
@@ -93,7 +94,41 @@ window.addRow = (containerId, type, data = {}) => {
         checkIrsLimits(element, true);
     }
 
-    if (type === 'investment') updateCostBasisVisibility(element);
+    if (type === 'investment') {
+        updateCostBasisVisibility(element);
+        const updateEff = () => {
+            const valIn = element.querySelector('[data-id="value"]');
+            const basIn = element.querySelector('[data-id="costBasis"]');
+            const typeIn = element.querySelector('[data-id="type"]');
+            const disp = element.querySelector('.tax-efficiency-display');
+            if (!valIn || !basIn || !typeIn || !disp) return;
+
+            const type = typeIn.value;
+            if (['Cash', 'Roth IRA', 'HSA'].includes(type)) {
+                disp.textContent = '100%';
+                disp.className = 'tax-efficiency-display text-xs font-bold text-emerald-400';
+            } else if (['Pre-Tax (401k/IRA)'].includes(type)) {
+                disp.textContent = 'Ord. Inc';
+                disp.className = 'tax-efficiency-display text-[10px] font-bold text-blue-400 uppercase tracking-tight';
+            } else {
+                const v = math.fromCurrency(valIn.value);
+                const b = math.fromCurrency(basIn.value);
+                if (v <= 0) {
+                    disp.textContent = '--';
+                } else {
+                    const gain = Math.max(0, v - b);
+                    const gainRatio = gain / v;
+                    // Est 15% LTCG
+                    const eff = (1 - (gainRatio * 0.15)) * 100;
+                    disp.textContent = Math.round(eff) + '%';
+                    disp.className = `tax-efficiency-display text-xs font-bold ${eff > 95 ? 'text-emerald-400' : (eff > 85 ? 'text-teal-400' : 'text-orange-400')}`;
+                }
+            }
+        };
+        updateEff();
+        element.querySelectorAll('input, select').forEach(i => i.addEventListener('input', updateEff));
+        element.querySelectorAll('select').forEach(i => i.addEventListener('change', updateEff));
+    }
 };
 
 export function initializeUI() {
@@ -344,10 +379,14 @@ function checkIrsLimits(row, isBudgetSavings = false) {
 function updateCostBasisVisibility(row) {
     const typeSel = row.querySelector('[data-id="type"]'), cbIn = row.querySelector('[data-id="costBasis"]');
     if (!typeSel || !cbIn) return;
-    const isBasisExempt = (['Pre-Tax (401k/IRA)', 'Cash', 'HSA', '529'].includes(typeSel.value));
+    const isBasisExempt = (['Pre-Tax (401k/IRA)', 'Cash', 'HSA'].includes(typeSel.value));
     cbIn.style.visibility = isBasisExempt ? 'hidden' : 'visible';
     cbIn.disabled = isBasisExempt;
     if (isBasisExempt) cbIn.value = '';
+    
+    // Trigger update for efficiency calc
+    const evt = new Event('input', { bubbles: true });
+    typeSel.dispatchEvent(evt);
 }
 
 window.updateSidebarChart = (data) => {

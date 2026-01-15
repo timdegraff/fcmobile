@@ -1,3 +1,4 @@
+
 import { math, stateTaxRates } from './utils.js';
 
 export const templates = {
@@ -16,7 +17,6 @@ export const templates = {
                 'Crypto': 'text-type-crypto',
                 'Metals': 'text-type-metals',
                 'HSA': 'text-type-hsa',
-                '529': 'text-type-529',
                 'Stock Options': 'text-orange-400'
             };
             return map[type] || 'text-white';
@@ -55,12 +55,14 @@ export const templates = {
                         <option value="Crypto" ${type === 'Crypto' ? 'selected' : ''}>Crypto</option>
                         <option value="Metals" ${type === 'Metals' ? 'selected' : ''}>Metals</option>
                         <option value="HSA" ${type === 'HSA' ? 'selected' : ''}>HSA</option>
-                        <option value="529" ${type === '529' ? 'selected' : ''}>529</option>
                     </select>
                 </div>
             </td>
             <td><input data-id="value" data-type="currency" type="text" placeholder="$0" class="input-base text-right text-teal-400 font-bold mono-numbers"></td>
             <td><input data-id="costBasis" data-type="currency" type="text" placeholder="$0" class="input-base text-right text-blue-400/70 mono-numbers"></td>
+            <td class="text-center px-1">
+                <div class="tax-efficiency-display text-xs font-bold text-slate-500 mono-numbers">--</div>
+            </td>
             <td class="text-right"><button data-action="remove" class="w-6 h-6 flex items-center justify-center rounded-full text-slate-600 hover:text-red-400 hover:bg-red-500/10 transition-all ml-auto"><i class="fas fa-times text-xs"></i></button></td>
         `;
     },
@@ -186,7 +188,6 @@ export const templates = {
                     <option value="Crypto" ${type === 'Crypto' ? 'selected' : ''}>Crypto</option>
                     <option value="Metals" ${type === 'Metals' ? 'selected' : ''}>Metals</option>
                     <option value="HSA" ${type === 'HSA' ? 'selected' : ''}>HSA</option>
-                    <option value="529" ${type === '529' ? 'selected' : ''}>529</option>
                 </select>
                 <div data-id="capWarning" class="hidden text-yellow-500 text-[10px] cursor-help animate-pulse" title="Exceeds Annual IRS Family Limit ($8,550)">
                     <i class="fas fa-exclamation-triangle"></i>

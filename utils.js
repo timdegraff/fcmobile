@@ -19,8 +19,7 @@ export const assetColors = {
     'Other': '#64748b',
     'HELOC': '#ef4444',
     'Debt': '#dc2626',
-    'HSA': '#2dd4bf',
-    '529': '#fb7185'
+    'HSA': '#2dd4bf'
 };
 
 export const assumptions = {

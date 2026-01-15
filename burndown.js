@@ -516,7 +516,6 @@ export const burndown = {
             'metals': investments.filter(i => i.type === 'Metals').reduce((s, i) => s + math.fromCurrency(i.value), 0),
             'metalsBasis': investments.filter(i => i.type === 'Metals').reduce((s, i) => s + math.fromCurrency(i.costBasis), 0),
             'hsa': investments.filter(i => i.type === 'HSA').reduce((s, i) => s + math.fromCurrency(i.value), 0),
-            '529': investments.filter(i => i.type === '529').reduce((s, i) => s + math.fromCurrency(i.value), 0),
             'heloc': helocs.reduce((s, h) => s + math.fromCurrency(h.balance), 0)
         };
 
@@ -558,7 +557,6 @@ export const burndown = {
                 else if (sav.type === 'HSA') { bal['hsa'] += amt; }
                 else if (sav.type === 'Crypto') { bal['crypto'] += amt; bal['cryptoBasis'] += amt; }
                 else if (sav.type === 'Metals') { bal['metals'] += amt; bal['metalsBasis'] += amt; }
-                else if (sav.type === '529') { bal['529'] += amt; }
                 else if (sav.type === 'Pre-Tax (401k/IRA)') { bal['401k'] += amt; }
             });
 
@@ -622,7 +620,7 @@ export const burndown = {
                     const fmv = math.fromCurrency(x.currentPrice) * optGrowth;
                     return s + (Math.max(0, (fmv - math.fromCurrency(x.strikePrice)) * parseFloat(x.shares)));
                 }, 0);
-                const sLiquid = b.cash + b.taxable + b.crypto + b.metals + b['401k'] + b['roth-basis'] + b['roth-earnings'] + b.hsa + b['529'];
+                const sLiquid = b.cash + b.taxable + b.crypto + b.metals + b['401k'] + b['roth-basis'] + b['roth-earnings'] + b.hsa;
                 return (sLiquid + sRE + sOA + sOptNW) - (b['heloc'] + sREDebt + sOADebt + sOtherDebt);
             };
 
@@ -709,7 +707,9 @@ export const burndown = {
                                 drawMap['taxable'] = (drawMap['taxable'] || 0) + actualDraw;
                                 curLtcgDraw += (actualDraw * (1 - bR));
                                 magiGap -= (actualDraw * (1 - bR));
-                                traceLog.push(`Harvesting ${math.toCurrency(actualDraw)} from Brokerage to generate MAGI.`);
+                                
+                                const taxEff = (1 - ((1 - bR) * 0.15)) * 100;
+                                traceLog.push(`Harvesting ${math.toCurrency(actualDraw)} from Brokerage to generate MAGI. (Tax Efficiency: ${Math.round(taxEff)}% due to ${Math.round(bR*100)}% Basis)`);
                             }
                         }
                         
@@ -818,6 +818,10 @@ export const burndown = {
                                 
                                 if (iter === 14 && loggable) {
                                     let msg = `Drawing ${math.toCurrency(draw)} from ${burndown.assetMeta[pk].label}.`;
+                                    if (['taxable', 'crypto', 'metals'].includes(pk)) {
+                                        const eff = (1 - ((1 - bR) * (0.15 + (stateTaxRates[assumptions.state]?.rate || 0)))) * 100;
+                                        msg += ` (Tax Efficiency: ${Math.round(eff)}%)`;
+                                    }
                                     if (smartAdjustments[pk]) msg += ` (Smart Correction Applied)`;
                                     traceLog.push(msg);
                                 }
@@ -877,8 +881,7 @@ export const burndown = {
                 { name: '401k/IRA', value: bal['401k'], color: assetColors['Pre-Tax (401k/IRA)'] },
                 { name: 'Bitcoin', value: bal['crypto'], color: assetColors['Crypto'] },
                 { name: 'Metals', value: bal['metals'], color: assetColors['Metals'] },
-                { name: 'HSA', value: bal['hsa'], color: assetColors['HSA'] },
-                { name: '529 Plan', value: bal['529'], color: assetColors['529'] }
+                { name: 'HSA', value: bal['hsa'], color: assetColors['HSA'] }
             ];
 
             results.push({ 
@@ -888,7 +891,7 @@ export const burndown = {
             });
 
             // Apply growth for NEXT year
-            ['taxable', '401k', 'hsa', '529'].forEach(k => bal[k] *= (1 + stockGrowth));
+            ['taxable', '401k', 'hsa'].forEach(k => bal[k] *= (1 + stockGrowth));
             bal['crypto'] *= (1 + cryptoGrowth);
             bal['metals'] *= (1 + metalsGrowth);
             bal['roth-earnings'] += ((bal['roth-basis'] + bal['roth-earnings']) * stockGrowth);

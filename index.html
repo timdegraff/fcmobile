@@ -1,3 +1,4 @@
+
 <!-- FIRECalc Stable v4.1.2 - Production Build -->
 <!DOCTYPE html>
 <html lang="en">
@@ -135,13 +136,16 @@
                     <!-- Investments -->
                     <div>
                         <div class="flex justify-between items-end mb-6 px-1">
-                            <h2 class="text-xl font-bold text-white tracking-tight">Investments</h2>
+                            <div class="flex flex-col gap-1">
+                                <h2 class="text-xl font-bold text-white tracking-tight">Investments</h2>
+                                <p class="text-[9px] font-bold text-slate-500 uppercase tracking-widest"><i class="fas fa-info-circle mr-1"></i> 529 Plans are excluded from this sheet as they are considered gifts/off-ledger assets.</p>
+                            </div>
                             <button data-add-row="investment-rows" data-row-type="investment" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-bold transition-all shadow-lg shadow-blue-900/20"><i class="fas fa-plus mr-2"></i>Add Account</button>
                         </div>
                         <div class="card-container overflow-hidden">
                             <table class="w-full text-xs">
                                 <thead class="text-slate-500 label-std border-b border-white/5">
-                                    <tr><th class="w-6"></th><th class="text-left w-[35%]">Account Name</th><th class="text-left w-[20%]">Asset Class</th><th class="text-right w-[20%]">Value</th><th class="text-right w-[20%]">Cost Basis</th><th class="w-6"></th></tr>
+                                    <tr><th class="w-6"></th><th class="text-left w-[30%]">Account Name</th><th class="text-left w-[18%]">Asset Class</th><th class="text-right w-[18%]">Value</th><th class="text-right w-[18%]">Cost Basis</th><th class="text-center w-[10%]">Tax Eff. %</th><th class="w-6"></th></tr>
                                 </thead>
                                 <tbody id="investment-rows" class="mono-numbers"></tbody>
                             </table>
@@ -311,7 +315,7 @@
                             <div class="w-8 h-8 rounded-lg bg-teal-500/20 flex items-center justify-center text-teal-400"><i class="fas fa-piggy-bank text-xs"></i></div>
                             <div>
                                 <h3 class="text-xl font-bold text-white tracking-tight">Annual Savings</h3>
-                                <p class="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Defined contributions and investments</p>
+                                <p class="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Surplus Income is SPENT, not saved here.</p>
                             </div>
                         </div>
                         <button data-add-row="budget-savings-rows" data-row-type="budget-savings" class="w-8 h-8 flex items-center justify-center bg-blue-600 hover:bg-blue-500 rounded-lg text-white transition-colors shadow-lg shadow-blue-900/20"><i class="fas fa-plus text-xs"></i></button>

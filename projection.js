@@ -1,3 +1,4 @@
+
 import { math, engine, assetColors } from './utils.js';
 import { burndown } from './burndown.js'; 
 
@@ -105,7 +106,6 @@ export const projection = {
             'Crypto': investments.filter(i => i.type === 'Crypto').reduce((s, i) => s + math.fromCurrency(i.value), 0),
             'Metals': investments.filter(i => i.type === 'Metals').reduce((s, i) => s + math.fromCurrency(i.value), 0),
             'HSA': investments.filter(i => i.type === 'HSA').reduce((s, i) => s + math.fromCurrency(i.value), 0),
-            '529': investments.filter(i => i.type === '529').reduce((s, i) => s + math.fromCurrency(i.value), 0),
             'Real Estate': realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) - math.fromCurrency(r.mortgage)), 0),
             'Other': otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) - math.fromCurrency(o.loan)), 0)
         };
@@ -133,7 +133,7 @@ export const projection = {
                 if (age <= chartEndAge) datasets[idx].data.push(disp);
                 currentYearBuckets[key] = disp;
                 
-                if (['Brokerage', 'Pre-Tax', 'Post-Tax', 'HSA', '529'].includes(key)) buckets[key] *= (1 + stockGrowth);
+                if (['Brokerage', 'Pre-Tax', 'Post-Tax', 'HSA'].includes(key)) buckets[key] *= (1 + stockGrowth);
                 else if (key === 'Crypto') buckets[key] *= (1 + cryptoGrowth);
                 else if (key === 'Metals') buckets[key] *= (1 + metalsGrowth);
                 else if (key === 'Real Estate') buckets[key] *= (1 + realEstateGrowth);
@@ -164,7 +164,6 @@ export const projection = {
                 else if (sav.type === 'HSA') buckets['HSA'] += amt;
                 else if (sav.type === 'Crypto') buckets['Crypto'] += amt;
                 else if (sav.type === 'Metals') buckets['Metals'] += amt;
-                else if (sav.type === '529') buckets['529'] += amt;
                 else if (sav.type === 'Pre-Tax (401k/IRA)') buckets['Pre-Tax'] += amt;
             });
         }

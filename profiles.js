@@ -1,3 +1,4 @@
+
 export const BLANK_PROFILE = {
     investments: [
         { name: 'TIM 401K', type: 'Pre-Tax (401k/IRA)', value: 670600, costBasis: 0 },
@@ -8,7 +9,6 @@ export const BLANK_PROFILE = {
         { name: 'GOLD', type: 'Metals', value: 19000, costBasis: 15000 },
         { name: 'SILVER', type: 'Metals', value: 4000, costBasis: 3000 },
         { name: 'HSA', type: 'HSA', value: 35000, costBasis: 0 },
-        { name: '529', type: '529', value: 68000, costBasis: 0 },
         { name: 'TEAMGM', type: 'Taxable', value: 30000, costBasis: 30000 },
         { name: 'APRIL CTT', type: 'Taxable', value: 50000, costBasis: 50000 },
         { name: 'CHECKING ACCOUNT', type: 'Cash', value: 25000, costBasis: 25000 }
@@ -38,7 +38,6 @@ export const BLANK_PROFILE = {
     budget: {
         savings: [
             { type: 'HSA', monthly: 604, annual: 7250, remainsInRetirement: false },
-            { type: '529', monthly: 400, annual: 4800, remainsInRetirement: false },
             { type: 'Metals', monthly: 750, annual: 9000, remainsInRetirement: false },
             { type: 'Taxable', monthly: 833, annual: 10000, remainsInRetirement: false }
         ],
