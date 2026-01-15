@@ -197,13 +197,17 @@ export const burndown = {
         if (traceYearInput && traceAgeInput) {
             traceYearInput.oninput = () => {
                 const year = parseInt(traceYearInput.value);
-                const match = fullSimulationResults.find(r => r.year === year);
+                const firstYear = fullSimulationResults[0]?.year || 2026;
+                if (year < firstYear) traceYearInput.value = firstYear;
+                const match = fullSimulationResults.find(r => r.year === parseInt(traceYearInput.value));
                 if (match) traceAgeInput.value = match.age;
                 burndown.renderTrace();
             };
             traceAgeInput.oninput = () => {
                 const age = parseInt(traceAgeInput.value);
-                const match = fullSimulationResults.find(r => r.age === age);
+                const firstAge = fullSimulationResults[0]?.age || 40;
+                if (age < firstAge) traceAgeInput.value = firstAge;
+                const match = fullSimulationResults.find(r => r.age === parseInt(traceAgeInput.value));
                 if (match) traceYearInput.value = match.year;
                 burndown.renderTrace();
             };
@@ -531,7 +535,7 @@ export const burndown = {
                     traceLog.push(`Determined MAGI Ceiling of ${math.toCurrency(magiLimit)} to protect benefits.`);
                 }
 
-                // ADAPTIVE SOLVER: Up to 10 iterations, but breaks early if within precision targets
+                // ADAPTIVE SOLVER
                 for (let iter = 0; iter < 10; iter++) {
                     bal = { ...startOfYearBal }; drawMap = {}; preTaxDraw = 0;
                     let curOrdDraw = 0, curLtcgDraw = 0;
@@ -551,9 +555,16 @@ export const burndown = {
                             const testTax2 = engine.calculateTax(floorTaxable + curOrdDraw + 1000, curLtcgDraw, filingStatus, assumptions.state, infFac);
                             const marginalOrd = (testTax2 - testTax1) / 1000;
                             
-                            // Factor in SNAP drag (~30%) into ETR estimate if we are in the aid zone to improve convergence
-                            const isSnapEligible = (floorTaxable + curOrdDraw) / 12 <= (fpl100 * 2.0 / 12);
-                            const snapDrag = isSnapEligible ? 0.30 : 0;
+                            // FIX: Logic check for SNAP drag zone. If the current gap + current income 
+                            // is already significantly past the SNAP limit, don't apply the 30% drag 
+                            // to the ETR calculation for this chunk, otherwise it overdraws.
+                            const snapIncomeLimit = fpl100 * 2.0; 
+                            const isCurrentlyInSnapZone = (floorTaxable + curOrdDraw) <= snapIncomeLimit;
+                            const willProjectedDrawExceedSnapZone = (floorTaxable + curOrdDraw + gap) > snapIncomeLimit;
+                            
+                            // If drawing this whole gap pushes us way out of SNAP, the 30% drag only applies to a sliver.
+                            // We dampen it to prevent the "SNAP Trap" overdraw.
+                            let snapDrag = (isCurrentlyInSnapZone && !willProjectedDrawExceedSnapZone) ? 0.30 : (isCurrentlyInSnapZone ? 0.10 : 0);
                             
                             let etr = burndown.assetMeta[pk].isTaxable ? (pk === '401k' ? marginalOrd + snapDrag : (1 - bR) * (0.15 + st + snapDrag)) : 0;
                             if (etr >= 0.9) etr = 0.5;
@@ -607,8 +618,8 @@ export const burndown = {
                     // ADAPTIVE BREAKERS
                     const iterPostTax = (floorGross + preTaxDraw + snap) - taxes;
                     const iterError = Math.abs(iterPostTax - targetBudget) / targetBudget;
-                    if (iter >= 2 && iterError <= 0.005) break; // Within 0.5% at 3 passes
-                    if (iter >= 4 && iterError <= 0.01) break;  // Within 1.0% at 5 passes
+                    if (iter >= 2 && iterError <= 0.005) break; 
+                    if (iter >= 4 && iterError <= 0.01) break;  
                 }
                 const fMAGI = floorTaxable + (drawMap['401k'] || 0) + ((drawMap['taxable']||0)*(1-(startOfYearBal.taxableBasis/startOfYearBal.taxable||1)));
                 status = (age >= 65 ? 'Medicare' : (fMAGI/fpl100 <= 1.38 ? 'Platinum' : 'Silver'));
@@ -616,12 +627,10 @@ export const burndown = {
             }
 
             const postTaxInc = (floorGross + preTaxDraw + snap) - taxes;
-            // marking as ERROR if over 2% threshold after 10 passes
             if (isRet && status !== 'INSOLVENT' && status !== 'ERROR' && Math.abs(postTaxInc - targetBudget) > (targetBudget * 0.02)) {
                 status = 'ERROR';
             }
             
-            // Grow 529 asset using stock growth rate (consistent with sidebar summary behavior)
             const stockGrowth = math.getGrowthForAge('Stock', age, assumptions.currentAge, assumptions);
             bal['529'] *= (1 + stockGrowth);
             
