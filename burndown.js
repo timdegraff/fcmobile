@@ -370,6 +370,7 @@ export const burndown = {
         const fmtNW = (v) => math.toSmartCompactCurrency(v);
         const l = cycle.traceLog || [];
         const breakdown = cycle.incomeBreakdown || [];
+        const inventory = (cycle.nwBreakdown || []).filter(item => Math.abs(item.value) > 1).sort((a, b) => b.value - a.value);
         const nwDelta = cycle.netWorth - cycle.startNW;
 
         container.innerHTML = `
@@ -443,6 +444,26 @@ export const burndown = {
                     <div class="text-right">
                         <span class="text-slate-500 uppercase tracking-widest text-[9px] block mb-1">NW: Start » End</span>
                         <span class="font-black text-teal-400 text-sm">${fmtNW(cycle.startNW)} » ${fmtNW(cycle.netWorth)}</span>
+                    </div>
+                </div>
+
+                <div class="mt-6 pt-6 border-t border-white/5">
+                    <div class="flex items-center justify-between mb-4">
+                        <p class="text-[10px] font-black text-white uppercase tracking-[0.2em]">End of Year Asset Inventory</p>
+                        <span class="text-[8px] font-bold text-slate-500 uppercase tracking-widest">Sorted by Value (Desc)</span>
+                    </div>
+                    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                        ${inventory.map(item => `
+                            <div class="bg-white/5 border border-white/5 p-2 rounded-lg flex flex-col justify-between">
+                                <div class="flex items-center gap-1.5 mb-1 truncate">
+                                    <div class="w-1.5 h-1.5 rounded-full flex-shrink-0" style="background-color: ${item.color || '#fff'}"></div>
+                                    <span class="text-[8px] font-bold text-slate-400 uppercase tracking-tighter truncate">${item.name}</span>
+                                </div>
+                                <div class="text-[11px] font-black ${item.value >= 0 ? 'text-white' : 'text-red-400'} mono-numbers">
+                                    ${fmt(item.value)}
+                                </div>
+                            </div>
+                        `).join('')}
                     </div>
                 </div>
             </div>
@@ -685,23 +706,50 @@ export const burndown = {
             }
 
             const postTaxInc = (floorGross + preTaxDraw + snap) - taxes;
-            if (isRet && status !== 'INSOLVENT' && Math.abs(postTaxInc - targetBudget) > (targetBudget * 0.05)) {
-                status = 'ERROR';
+            if (isRet && status !== 'INSOLVENT') {
+                if ((targetBudget - postTaxInc) > 50) {
+                    status = 'INSOLVENT';
+                } else if ((postTaxInc - targetBudget) > (targetBudget * 0.05) && preTaxDraw > 100) {
+                    status = 'ERROR';
+                }
             }
             
             const stockGrowth = math.getGrowthForAge('Stock', age, assumptions.currentAge, assumptions);
             bal['529'] *= (1 + stockGrowth);
             
             const liquid = bal.cash + bal.taxable + bal.crypto + bal.metals + bal['401k'] + bal['roth-basis'] + bal['roth-earnings'] + bal.hsa + bal['529'];
+            
+            // Calculate detailed NW Breakdown for trace
+            const curREEquity = realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) * reGrowth) - Math.max(0, math.fromCurrency(r.mortgage) - (math.fromCurrency(r.principalPayment)*12*i)), 0);
+            const curOAEquity = otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) * oaGrowth) - Math.max(0, math.fromCurrency(o.loan) - (math.fromCurrency(o.principalPayment)*12*i)), 0);
+            const curPEVal = stockOptions.reduce((s, x) => s + (Math.max(0, (math.fromCurrency(x.currentPrice) * optGrowth - math.fromCurrency(x.strikePrice)) * parseFloat(x.shares))), 0);
+            const curDebtBal = debts.reduce((s, d) => s + Math.max(0, math.fromCurrency(d.balance) - (math.fromCurrency(d.principalPayment)*12*i)), 0);
+
             const curNW = (liquid + realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) * reGrowth), 0) + otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) * oaGrowth), 0) + stockOptions.reduce((s, x) => s + (Math.max(0, (math.fromCurrency(x.currentPrice) * optGrowth - math.fromCurrency(x.strikePrice)) * parseFloat(x.shares))), 0)) - (bal['heloc'] + realEstate.reduce((s, r) => s + Math.max(0, math.fromCurrency(r.mortgage) - (math.fromCurrency(r.principalPayment)*12*i)), 0) + otherAssets.reduce((s, o) => s + Math.max(0, math.fromCurrency(o.loan) - (math.fromCurrency(o.principalPayment)*12*i)), 0) + debts.reduce((s, d) => s + math.fromCurrency(d.balance) - (math.fromCurrency(d.principalPayment)*12*i)), 0);
 
-            if (liquid < 1000 && firstInsolvencyAge === null) firstInsolvencyAge = age;
+            const nwBreakdown = [
+                { name: 'Cash', value: bal['cash'], color: assetColors['Cash'] },
+                { name: 'Brokerage', value: bal['taxable'], color: assetColors['Taxable'] },
+                { name: 'Roth IRA', value: bal['roth-basis'] + bal['roth-earnings'], color: assetColors['Roth IRA'] },
+                { name: '401k/IRA', value: bal['401k'], color: assetColors['Pre-Tax (401k/IRA)'] },
+                { name: 'Bitcoin', value: bal['crypto'], color: assetColors['Crypto'] },
+                { name: 'Metals', value: bal['metals'], color: assetColors['Metals'] },
+                { name: 'HSA', value: bal['hsa'], color: assetColors['HSA'] },
+                { name: '529 Plan', value: bal['529'], color: assetColors['529'] },
+                { name: 'Real Estate Equity', value: curREEquity, color: assetColors['Real Estate'] },
+                { name: 'Other Assets Equity', value: curOAEquity, color: assetColors['Other'] },
+                { name: 'Stock Options', value: curPEVal, color: assetColors['Stock Options'] },
+                { name: 'HELOC Debt', value: -bal['heloc'], color: assetColors['HELOC'] },
+                { name: 'Other Debt', value: -curDebtBal, color: assetColors['Debt'] }
+            ];
+
+            if ((liquid < 1000 || status === 'INSOLVENT') && firstInsolvencyAge === null) firstInsolvencyAge = age;
             if (liquid < 1000) status = 'INSOLVENT';
 
             results.push({ 
                 age, year, budget: targetBudget, helocInt: helocInterestThisYear, isFirstRetYear: age === rAge, 
                 preTaxDraw, taxes, snap, balances: { ...bal }, draws: drawMap, postTaxInc, status, 
-                netWorth: curNW, startNW, floorGross, incomeBreakdown, traceLog
+                netWorth: curNW, startNW, floorGross, incomeBreakdown, traceLog, nwBreakdown
             });
         }
         return results;

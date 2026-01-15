@@ -1,3 +1,4 @@
+
 ================================================================================
 TO DO LIST & ARCHITECTURAL ROADMAP
 ================================================================================
@@ -13,6 +14,8 @@ CRITICAL FUTURE UPDATES:
 - [ ] Phase 2: REVENUE - Add "Educational Needs" section in Budget for automated 529 drawdown tracking.
 
 V4.5 COMPLETED LOGIC:
+- [x] SOLVER: Implemented Newton-Raphson "Smart Correction" to hit budget targets with $1 precision.
+- [x] IRON FIST: Enforced strict priority depletion (no priority smearing across accounts).
 - [x] PERSONAS: Simplified to "HANDOUT HUNTER" and "IRON FIST". 
 - [x] UI REORGANIZATION: Swapped SNAP (now middle) and Cash Safety Net (now right) cards.
 - [x] UI: Moved Real Dollars toggle to the top header for better accessibility.
@@ -53,7 +56,7 @@ CORE FEATURE MODULES
 --------------------------------------------------------------------------------
 THE BURNDOWN ENGINE: DECUMULATION LOGIC
 --------------------------------------------------------------------------------
-The "Burndown" is a 10-pass iterative solver that determines the exact 
+The "Burndown" is a 15-pass iterative solver that determines the exact 
 withdrawal required to satisfy the target budget while accounting for the 
 "Tax Spiral" (withdrawals increase taxes, which require more withdrawals).
 
@@ -64,10 +67,31 @@ withdrawal required to satisfy the target budget while accounting for the
     If a user retires before age 59.5, the engine calculates the maximum IRS-
     allowed penalty-free withdrawal (SEPP) based on life expectancy.
 
-3.  SURVIVAL PASS (VULTURES PASS): 
-    If strategic limits (like SEPP) fail to meet the budget, the engine 
-    triggers an exhaustive pass that ignores all strategy to pull every 
-    available liquid dollar until the budget is met or accounts hit $0.
+--------------------------------------------------------------------------------
+ALGORITHM ARCHIVE: SMART ERROR-CORRECTION SOLVER (NEWTON-RAPHSON)
+--------------------------------------------------------------------------------
+Implemented in v4.5 to resolve tax calculation overshoots/undershoots.
+
+1.  LOOP STRUCTURE:
+    - Runs a 15-pass iterative cycle.
+    - Tracks `smartAdjustments` map persistently across loops.
+
+2.  ERROR MEASUREMENT:
+    - At end of Loop N, calculates `surplus = RealizedPostTaxIncome - TargetBudget`.
+    - Determines `observedFriction` (Tax + Aid Loss per dollar drawn).
+
+3.  CORRECTION LOGIC (Newton-Raphson):
+    - Calculates `GrossCorrection = surplus / (1 - observedFriction)`.
+    - Identifies the "Marginal Asset" (the last account touched in the waterfall).
+    - Applies `GrossCorrection * 0.8` (Damping Factor) to that specific asset's
+      target draw for Loop N+1.
+
+4.  STRICT PRIORITY ("IRON FIST"):
+    - Enforces `adjustmentWeight = 1.0`.
+    - If an account has funds but doesn't cover the full gap, it draws 100% 
+      of the account and STOPS the waterfall for that loop to prevent 
+      "priority smearing" (drawing small amounts from lower priority accounts 
+      due to tax estimation errors).
 
 --------------------------------------------------------------------------------
 BURNDOWN STRATEGY MODES
