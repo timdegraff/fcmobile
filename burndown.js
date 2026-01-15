@@ -540,6 +540,7 @@ export const burndown = {
 
             let drawMap = {}, preTaxDraw = 0, taxes = 0, snap = 0, status = 'Silver';
             let traceLog = [], observedFriction = 0.25;
+            let smartAdjustments = {}; // PERSISTENT ERROR CORRECTION MEMORY
 
             if (!isRet) {
                 taxes = engine.calculateTax(floorTaxable, 0, filingStatus, assumptions.state, infFac);
@@ -562,7 +563,7 @@ export const burndown = {
                     traceLog.push(`Determined MAGI Ceiling of ${math.toCurrency(magiLimit)} to protect benefits.`);
                 }
 
-                // 15-PASS HIGH PRECISION SOLVER
+                // 15-PASS SMART CORRECTION SOLVER
                 for (let iter = 0; iter < 15; iter++) {
                     bal = { ...startOfYearBal }; drawMap = {}; preTaxDraw = 0;
                     let curOrdDraw = 0, curLtcgDraw = 0;
@@ -578,36 +579,31 @@ export const burndown = {
                             let bR = (['taxable', 'crypto', 'metals'].includes(pk) && bal[pk] > 0) ? bal[pk+'Basis'] / bal[pk] : 1;
                             let st = (stateTaxRates[assumptions.state]?.rate || 0);
                             
-                            // WHOLE-GAP PRE-FLIGHT RESOLVER (New for strict priority)
+                            // CALCULATE RAW NEED
                             let currentDrag = observedFriction;
-                            if (iter >= 2) {
-                                // Simulate tax/benefit impact for the ENTIRE current gap to avoid priority smearing
-                                const testOrdBase = floorTaxable + curOrdDraw;
-                                const testLtcgBase = curLtcgDraw;
-                                
-                                const tB = engine.calculateTax(testOrdBase, testLtcgBase, filingStatus, assumptions.state, infFac);
-                                const sB = engine.calculateSnapBenefit(testOrdBase/12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
-                                
-                                // Iron Fist Calibration: Check impact of closing the gap specifically using this asset type
-                                const simulatedGrossNeeded = gap / (1 - observedFriction);
-                                const testOrdTarget = testOrdBase + (pk === '401k' ? simulatedGrossNeeded : 0);
-                                const testLtcgTarget = testLtcgBase + (['taxable', 'crypto', 'metals'].includes(pk) ? simulatedGrossNeeded * (1-bR) : 0);
-                                
-                                const tT = engine.calculateTax(testOrdTarget, testLtcgTarget, filingStatus, assumptions.state, infFac);
-                                const sT = engine.calculateSnapBenefit(testOrdTarget/12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
-                                
-                                const netLoss = (tT - tB) + (sB - sT);
-                                currentDrag = netLoss / Math.max(1, simulatedGrossNeeded);
-                            }
-
+                            // Clamp expected friction
                             currentDrag = Math.min(0.85, Math.max(0, currentDrag));
+                            
                             let etr = burndown.assetMeta[pk].isTaxable ? (pk === '401k' ? currentDrag : (1 - bR) * (0.15 + st + currentDrag)) : 0;
                             
-                            // Strict Priority Rule: 100% weight in Iron Fist to deplete fully before next account
-                            let adjustmentWeight = (persona === 'RAW') ? 1.0 : (iter >= 10 ? 1.0 : 0.8);
-                            let draw = Math.min(av, (gap / (1 - Math.max(0, etr))) * adjustmentWeight);
+                            // Base calculation from friction
+                            let rawDrawNeeded = gap / (1 - Math.max(0, etr));
                             
-                            if (iter === 14 && loggable) traceLog.push(`Drawing ${math.toCurrency(draw)} from ${burndown.assetMeta[pk].label}. Marginal drag calibrated at ${Math.round(etr*100)}%. Remaining gap: ${math.toCurrency(gap-draw)}`);
+                            // APPLY SMART CORRECTION
+                            // If previous loops overshot, adjustments[pk] will be positive, reducing the draw.
+                            if (smartAdjustments[pk]) {
+                                rawDrawNeeded -= smartAdjustments[pk];
+                            }
+                            
+                            // Strict Priority Rule: In Iron Fist, try to take full needed amount from this account
+                            let adjustmentWeight = (persona === 'RAW') ? 1.0 : (iter >= 10 ? 1.0 : 0.8);
+                            let draw = Math.min(av, Math.max(0, rawDrawNeeded * adjustmentWeight));
+                            
+                            if (iter === 14 && loggable) {
+                                let msg = `Drawing ${math.toCurrency(draw)} from ${burndown.assetMeta[pk].label}.`;
+                                if (smartAdjustments[pk]) msg += ` (Smart Correction Applied: ${math.toCurrency(-smartAdjustments[pk])})`;
+                                traceLog.push(msg);
+                            }
                             
                             if (pk === 'heloc') bal['heloc'] += draw;
                             else {
@@ -618,13 +614,14 @@ export const burndown = {
                             if (pk === '401k') curOrdDraw += draw;
                             else if (['taxable', 'crypto', 'metals'].includes(pk)) curLtcgDraw += (draw * (1 - bR));
                             
-                            // If this account didn't fully empty, we satisfied the whole weighted gap. 
-                            // In strict priority, we stop the waterfall here for this iteration to avoid smears.
+                            // If this account didn't fully empty, we ostensibly satisfied the gap. 
+                            // In strict priority, we stop the waterfall here to avoid priority smearing.
                             if (draw < av) break;
                         }
                     };
 
                     if (persona === 'PLATINUM') {
+                        // Platinum Logic (unchanged)
                         for (const pk of ['taxable', 'crypto', 'metals']) {
                             const currentNetPre = (floorGross + preTaxDraw + snap) - taxes;
                             const budgetGap = targetBudget - currentNetPre;
@@ -651,11 +648,33 @@ export const burndown = {
                     snap = engine.calculateSnapBenefit((floorTaxable + curOrdDraw) / 12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
 
                     const iterPostTax = (floorGross + preTaxDraw + snap) - taxes;
-                    const iterError = Math.abs(iterPostTax - targetBudget) / targetBudget;
+                    const surplus = iterPostTax - targetBudget;
+                    const iterError = Math.abs(surplus) / targetBudget;
                     
+                    // SMART CALIBRATION LOGIC
+                    // Calculate observed friction for the next loop's base estimate
                     if (preTaxDraw > 100) {
                         const netBenefitProduced = (iterPostTax - (floorGross - engine.calculateTax(floorTaxable, 0, filingStatus, assumptions.state, infFac)));
                         observedFriction = Math.min(0.9, Math.max(0, 1 - (netBenefitProduced / preTaxDraw)));
+                    }
+
+                    // IDENTIFY MARGINAL ASSET & APPLY CORRECTION
+                    const drawnKeys = Object.keys(drawMap).filter(k => drawMap[k] > 0);
+                    const marginalKey = drawnKeys[drawnKeys.length - 1]; 
+                    
+                    if (marginalKey && iterError > 0.005) {
+                        // Inverse of (1 - friction) is the Gross-to-Net Multiplier.
+                        // We use the observed global friction as a proxy for the marginal dollar's friction.
+                        const correctionScale = 1 / (1 - observedFriction);
+                        
+                        // If surplus > 0, we drew too much. Correction should be POSITIVE to subtract from draw.
+                        // If surplus < 0, we drew too little. Correction should be NEGATIVE to add to draw (subtracting a negative).
+                        const grossCorrection = surplus * correctionScale;
+                        
+                        // Dampening factor to prevent oscillation around cliffs (Smart Ratio)
+                        const smartRatio = 0.8; 
+                        
+                        smartAdjustments[marginalKey] = (smartAdjustments[marginalKey] || 0) + (grossCorrection * smartRatio);
                     }
 
                     if (iter >= 4 && iterError <= 0.01) break; 
