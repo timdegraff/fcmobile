@@ -552,8 +552,11 @@ export const burndown = {
                             let st = (stateTaxRates[assumptions.state]?.rate || 0);
                             
                             const testTax1 = engine.calculateTax(floorTaxable + curOrdDraw, curLtcgDraw, filingStatus, assumptions.state, infFac);
-                            const testTax2 = engine.calculateTax(floorTaxable + curOrdDraw + 1000, curLtcgDraw, filingStatus, assumptions.state, infFac);
-                            const marginalOrd = (testTax2 - testTax1) / 1000;
+                            
+                            // FIX: Instead of testing a small $1000 increment, test the WHOLE gap impact
+                            // to calculate a Projected Effective Tax Rate (PETR) for this specific draw.
+                            const testTaxFull = engine.calculateTax(floorTaxable + curOrdDraw + gap, curLtcgDraw, filingStatus, assumptions.state, infFac);
+                            let marginalOrd = (testTaxFull - testTax1) / Math.max(1, gap);
                             
                             // FIX: Logic check for SNAP drag zone. If the current gap + current income 
                             // is already significantly past the SNAP limit, don't apply the 30% drag 
@@ -635,7 +638,7 @@ export const burndown = {
             bal['529'] *= (1 + stockGrowth);
             
             const liquid = bal.cash + bal.taxable + bal.crypto + bal.metals + bal['401k'] + bal['roth-basis'] + bal['roth-earnings'] + bal.hsa + bal['529'];
-            const curNW = (liquid + realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) * reGrowth), 0) + otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) * oaGrowth), 0) + stockOptions.reduce((s, x) => s + (Math.max(0, (math.fromCurrency(x.currentPrice) * optGrowth - math.fromCurrency(x.strikePrice)) * parseFloat(x.shares))), 0)) - (bal['heloc'] + realEstate.reduce((s, r) => s + Math.max(0, math.fromCurrency(r.mortgage) - (math.fromCurrency(r.principalPayment)*12*i)), 0) + otherAssets.reduce((s, o) => s + Math.max(0, math.fromCurrency(o.loan) - (math.fromCurrency(o.principalPayment)*12*i)), 0) + debts.reduce((s, d) => s + Math.max(0, math.fromCurrency(d.balance) - (math.fromCurrency(d.principalPayment)*12*i)), 0));
+            const curNW = (liquid + realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) * reGrowth), 0) + otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) * oaGrowth), 0) + stockOptions.reduce((s, x) => s + (Math.max(0, (math.fromCurrency(x.currentPrice) * optGrowth - math.fromCurrency(x.strikePrice)) * parseFloat(x.shares))), 0)) - (bal['heloc'] + realEstate.reduce((s, r) => s + Math.max(0, math.fromCurrency(r.mortgage) - (math.fromCurrency(r.principalPayment)*12*i)), 0) + otherAssets.reduce((s, o) => s + Math.max(0, math.fromCurrency(o.loan) - (math.fromCurrency(o.principalPayment)*12*i)), 0) + debts.reduce((s, d) => s + math.fromCurrency(d.balance) - (math.fromCurrency(d.principalPayment)*12*i)), 0));
 
             if (liquid < 1000 && firstInsolvencyAge === null) firstInsolvencyAge = age;
             if (liquid < 1000) status = 'INSOLVENT';
