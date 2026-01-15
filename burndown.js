@@ -554,23 +554,19 @@ export const burndown = {
                             const testTax1 = engine.calculateTax(floorTaxable + curOrdDraw, curLtcgDraw, filingStatus, assumptions.state, infFac);
                             
                             // FIX: Instead of testing a small $1000 increment, test the WHOLE gap impact
-                            // to calculate a Projected Effective Tax Rate (PETR) for this specific draw.
+                            // to calculate a Projected Chunk Tax Rate (PCTR) for this specific draw.
                             const testTaxFull = engine.calculateTax(floorTaxable + curOrdDraw + gap, curLtcgDraw, filingStatus, assumptions.state, infFac);
-                            let marginalOrd = (testTaxFull - testTax1) / Math.max(1, gap);
+                            let projectedTaxDragRate = (testTaxFull - testTax1) / Math.max(1, gap);
                             
-                            // FIX: Logic check for SNAP drag zone. If the current gap + current income 
-                            // is already significantly past the SNAP limit, don't apply the 30% drag 
-                            // to the ETR calculation for this chunk, otherwise it overdraws.
+                            // Factor in benefit cliff impact for non-linear optimization
                             const snapIncomeLimit = fpl100 * 2.0; 
                             const isCurrentlyInSnapZone = (floorTaxable + curOrdDraw) <= snapIncomeLimit;
                             const willProjectedDrawExceedSnapZone = (floorTaxable + curOrdDraw + gap) > snapIncomeLimit;
                             
-                            // If drawing this whole gap pushes us way out of SNAP, the 30% drag only applies to a sliver.
-                            // We dampen it to prevent the "SNAP Trap" overdraw.
                             let snapDrag = (isCurrentlyInSnapZone && !willProjectedDrawExceedSnapZone) ? 0.30 : (isCurrentlyInSnapZone ? 0.10 : 0);
                             
-                            let etr = burndown.assetMeta[pk].isTaxable ? (pk === '401k' ? marginalOrd + snapDrag : (1 - bR) * (0.15 + st + snapDrag)) : 0;
-                            if (etr >= 0.9) etr = 0.5;
+                            let etr = burndown.assetMeta[pk].isTaxable ? (pk === '401k' ? projectedTaxDragRate + snapDrag : (1 - bR) * (0.15 + st + snapDrag)) : 0;
+                            if (etr >= 0.95) etr = 0.60; // Safety cap to prevent infinite draw spikes
 
                             let draw = Math.min(av, gap / (1 - etr));
                             if (iter === 9 && loggable) traceLog.push(`Drawing ${math.toCurrency(draw)} from ${burndown.assetMeta[pk].label}. Marginal drag estimated at ${Math.round(etr*100)}%. Remaining gap: ${math.toCurrency(gap-draw)}`);
@@ -638,7 +634,7 @@ export const burndown = {
             bal['529'] *= (1 + stockGrowth);
             
             const liquid = bal.cash + bal.taxable + bal.crypto + bal.metals + bal['401k'] + bal['roth-basis'] + bal['roth-earnings'] + bal.hsa + bal['529'];
-            const curNW = (liquid + realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) * reGrowth), 0) + otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) * oaGrowth), 0) + stockOptions.reduce((s, x) => s + (Math.max(0, (math.fromCurrency(x.currentPrice) * optGrowth - math.fromCurrency(x.strikePrice)) * parseFloat(x.shares))), 0)) - (bal['heloc'] + realEstate.reduce((s, r) => s + Math.max(0, math.fromCurrency(r.mortgage) - (math.fromCurrency(r.principalPayment)*12*i)), 0) + otherAssets.reduce((s, o) => s + Math.max(0, math.fromCurrency(o.loan) - (math.fromCurrency(o.principalPayment)*12*i)), 0) + debts.reduce((s, d) => s + math.fromCurrency(d.balance) - (math.fromCurrency(d.principalPayment)*12*i)), 0));
+            const curNW = (liquid + realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) * reGrowth), 0) + otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) * oaGrowth), 0) + stockOptions.reduce((s, x) => s + (Math.max(0, (math.fromCurrency(x.currentPrice) * optGrowth - math.fromCurrency(x.strikePrice)) * parseFloat(x.shares))), 0)) - (bal['heloc'] + realEstate.reduce((s, r) => s + Math.max(0, math.fromCurrency(r.mortgage) - (math.fromCurrency(r.principalPayment)*12*i)), 0) + otherAssets.reduce((s, o) => s + Math.max(0, math.fromCurrency(o.loan) - (math.fromCurrency(o.principalPayment)*12*i)), 0) + debts.reduce((s, d) => s + Math.max(0, math.fromCurrency(d.balance) - (math.fromCurrency(d.principalPayment)*12*i)), 0));
 
             if (liquid < 1000 && firstInsolvencyAge === null) firstInsolvencyAge = age;
             if (liquid < 1000) status = 'INSOLVENT';
