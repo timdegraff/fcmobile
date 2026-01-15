@@ -718,7 +718,7 @@ export const burndown = {
             const shortfall = targetBudget - postTaxInc;
 
             if (isRet) {
-                if (shortfall > 50) {
+                if (shortfall > (targetBudget * 0.02)) {
                     status = 'INSOLVENT';
                     if (firstInsolvencyAge === null) firstInsolvencyAge = age;
                 } else if ((postTaxInc - targetBudget) > (targetBudget * 0.05) && preTaxDraw > 100) {
