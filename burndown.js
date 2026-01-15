@@ -76,7 +76,7 @@ export const burndown = {
                             <label class="text-[9px] font-bold text-blue-400 uppercase tracking-widest mb-1 flex items-center gap-1"><i class="fas fa-flag-checkered"></i> Retirement Runway</label>
                             <div id="card-runway-val" class="text-3xl font-black text-red-400 mono-numbers tracking-tighter">--</div>
                         </div>
-                        <div id="card-runway-sub" class="text-[9px] font-bold text-blue-400/60 uppercase tracking-tighter leading-none">SUSTAINS TARGET BUDGET IN 2026 DOLLARS UNTIL THIS AGE</div>
+                        <div id="card-runway-sub" class="text-[9px] font-bold text-blue-400/60 uppercase tracking-tighter leading-none">YEARS OF SOLVENCY REMAINING FROM TODAY</div>
                     </div>
 
                     <div id="card-dwz" class="bg-slate-900/50 rounded-2xl border border-slate-800 p-4 flex flex-col justify-between h-28 relative overflow-hidden cursor-pointer hover:border-pink-500/30 transition-colors" title="Solve for Max Sustainable Spend">
@@ -344,9 +344,18 @@ export const burndown = {
             }
         }
 
-        if (document.getElementById('card-runway-val')) document.getElementById('card-runway-val').textContent = firstInsolvencyAge ? firstInsolvencyAge : "100+";
+        const currentAge = parseFloat(data.assumptions.currentAge) || 40;
+        
+        if (document.getElementById('card-runway-val')) {
+            const runwayVal = firstInsolvencyAge ? (firstInsolvencyAge - currentAge) : null;
+            document.getElementById('card-runway-val').textContent = runwayVal !== null ? `${runwayVal} Years` : "Forever";
+        }
+        
         if (document.getElementById('card-dwz-val')) document.getElementById('card-dwz-val').textContent = math.toSmartCompactCurrency(burndown.lastCalculatedResults.dwz || 0);
-        if (document.getElementById('card-preservation-val')) document.getElementById('card-preservation-val').textContent = burndown.lastCalculatedResults.preservationAge || "100+";
+        
+        if (document.getElementById('card-preservation-val')) {
+            document.getElementById('card-preservation-val').textContent = firstInsolvencyAge ? firstInsolvencyAge : "100+";
+        }
 
         if (document.getElementById('burndown-table-container')) document.getElementById('burndown-table-container').innerHTML = burndown.renderTable(fullSimulationResults);
         
@@ -706,8 +715,13 @@ export const burndown = {
             }
 
             const postTaxInc = (floorGross + preTaxDraw + snap) - taxes;
-            if (isRet && status !== 'ERROR') {
-                if ((postTaxInc - targetBudget) > (targetBudget * 0.05) && preTaxDraw > 100) {
+            const shortfall = targetBudget - postTaxInc;
+
+            if (isRet) {
+                if (shortfall > 50) {
+                    status = 'INSOLVENT';
+                    if (firstInsolvencyAge === null) firstInsolvencyAge = age;
+                } else if ((postTaxInc - targetBudget) > (targetBudget * 0.05) && preTaxDraw > 100) {
                     status = 'ERROR';
                 }
             }
@@ -739,17 +753,6 @@ export const burndown = {
                 { name: 'HELOC Debt', value: -bal['heloc'], color: assetColors['HELOC'] },
                 { name: 'Other Debt', value: -curDebtBal, color: assetColors['Debt'] }
             ];
-
-            // INSOLVENCY DEFINITION: Depletion of all prioritized drawable assets (available balance < $500)
-            const liquidAvailable = burndown.priorityOrder.reduce((sum, pk) => {
-                const av = (pk === 'cash' ? Math.max(0, bal[pk] - cashFloor) : (pk === 'heloc' ? Math.max(0, helocLimit - bal[pk]) : bal[pk]));
-                return sum + av;
-            }, 0);
-
-            if (liquidAvailable < 500) {
-                status = 'INSOLVENT';
-                if (firstInsolvencyAge === null) firstInsolvencyAge = age;
-            }
 
             results.push({ 
                 age, year, budget: targetBudget, helocInt: helocInterestThisYear, isFirstRetYear: age === rAge, 
@@ -786,13 +789,14 @@ export const burndown = {
             const formatVal = (v) => math.toSmartCompactCurrency(v / inf);
             let badgeClass = r.status === 'INSOLVENT' || r.status === 'ERROR' ? 'bg-red-600 text-white' : (r.status === 'Platinum' ? 'bg-emerald-500 text-white' : (r.status === 'Active' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-400'));
             const assetGap = Math.max(0, r.budget - r.floorGross - r.snap);
+            const isInsolvent = r.status === 'INSOLVENT';
             return `<tr class="border-b border-white/5 hover:bg-white/5 text-[9px] ${r.status === 'ERROR' ? 'bg-red-900/10' : ''}">
                 <td class="p-2 text-center font-bold">${r.age}</td>
                 <td class="p-2 text-center"><div class="${r.isFirstRetYear ? 'text-white' : 'text-slate-400'}">${formatVal(r.budget)}</div>${r.isFirstRetYear ? '<div class="text-[7px] font-black text-amber-500 uppercase leading-none mt-0.5">Ret Year</div>' : ''}${r.helocInt > 10 ? `<div class="text-[7px] font-black text-orange-400 uppercase leading-none mt-0.5">+${formatVal(r.helocInt)} HELOC INT</div>` : ''}</td>
                 <td class="p-2 text-center"><span class="px-2 py-0.5 rounded-[4px] text-[7px] font-black uppercase tracking-wider ${badgeClass}">${r.status}</span></td>
                 <td class="p-2 text-center text-teal-400 font-bold">${formatVal(r.floorGross)}</td>
                 <td class="p-2 text-center text-emerald-500 font-bold">${formatVal(r.snap)}</td>
-                <td class="p-2 text-center text-orange-400 font-black">${formatVal(assetGap)}</td>
+                <td class="p-2 text-center ${isInsolvent ? 'text-red-500' : 'text-orange-400'} font-black">${formatVal(assetGap)}</td>
                 <td class="p-2 text-center text-white font-bold">${formatVal(r.preTaxDraw)}</td>
                 <td class="p-2 text-center text-red-400 font-bold">${formatVal(r.taxes)}</td>
                 ${columns.map(k => `<td class="p-1.5 text-center leading-tight"><div class="font-black" style="color: ${r.draws[k] > 0 ? burndown.assetMeta[k].color : '#475569'}">${r.draws[k] > 1 ? formatVal(r.draws[k]) : '$0'}</div><div class="text-slate-600 text-[7px] font-bold">${formatVal(r.balances[k] || 0)}</div></td>`).join('')}
