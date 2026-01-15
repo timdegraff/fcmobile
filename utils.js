@@ -270,11 +270,12 @@ export const engine = {
         const multiplier = Math.min(1, Math.max(0.1, workYears / 35));
         return fullBenefit * multiplier;
     },
-    calculateTaxableSocialSecurity: (ssAmount, otherIncome, status = 'Single') => {
+    calculateTaxableSocialSecurity: (ssAmount, otherIncome, status = 'Single', inflationFactor = 1) => {
         if (ssAmount <= 0) return 0;
         const provisionalIncome = otherIncome + (ssAmount * 0.5);
-        let t1 = status === 'Married Filing Jointly' ? 32000 : 25000;
-        let t2 = status === 'Married Filing Jointly' ? 44000 : 34000;
+        // Indexed to inflation as requested to prevent tax bracket creep in 40-year simulation
+        let t1 = (status === 'Married Filing Jointly' ? 32000 : 25000) * inflationFactor;
+        let t2 = (status === 'Married Filing Jointly' ? 44000 : 34000) * inflationFactor;
         let taxable = 0;
         if (provisionalIncome > t2) taxable = (0.5 * (t2 - t1)) + (0.85 * (provisionalIncome - t2));
         else if (provisionalIncome > t1) taxable = 0.5 * (provisionalIncome - t1);

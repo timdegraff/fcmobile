@@ -352,7 +352,9 @@ export const burndown = {
         }
 
         const fmt = (v) => math.toCurrency(v);
+        const fmtNW = (v) => math.toSmartCompactCurrency(v);
         const l = cycle.traceLog || [];
+        const nwDelta = cycle.netWorth - cycle.startNW;
 
         container.innerHTML = `
             <div class="space-y-4">
@@ -390,14 +392,18 @@ export const burndown = {
                     `).join('')}
                 </div>
 
-                <div class="flex justify-between items-center pt-4 border-t border-white/5 mt-4">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4 pt-4 border-t border-white/5">
                     <div>
-                        <span class="text-slate-500 uppercase tracking-widest text-[9px]">Cycle Net Result:</span>
-                        <span class="ml-2 font-black text-white text-sm">${fmt(cycle.postTaxInc)} / ${fmt(cycle.budget)} Target</span>
+                        <span class="text-slate-500 uppercase tracking-widest text-[9px] block mb-1">Cycle Net Result:</span>
+                        <span class="font-black text-white text-sm">${fmt(cycle.postTaxInc)} / ${fmt(cycle.budget)} Target</span>
+                    </div>
+                    <div class="text-center md:border-x border-white/5">
+                        <span class="text-slate-500 uppercase tracking-widest text-[9px] block mb-1">Year NW Delta:</span>
+                        <span class="font-black ${nwDelta >= 0 ? 'text-emerald-400' : 'text-red-400'} text-sm">${nwDelta >= 0 ? '+' : ''}${fmtNW(nwDelta)}</span>
                     </div>
                     <div class="text-right">
-                        <span class="text-slate-500 uppercase tracking-widest text-[9px]">End Balance NW:</span>
-                        <span class="ml-2 font-black text-teal-400 text-sm">${math.toSmartCompactCurrency(cycle.netWorth)}</span>
+                        <span class="text-slate-500 uppercase tracking-widest text-[9px] block mb-1">NW: Start » End</span>
+                        <span class="font-black text-teal-400 text-sm">${fmtNW(cycle.startNW)} » ${fmtNW(cycle.netWorth)}</span>
                     </div>
                 </div>
             </div>
@@ -431,7 +437,6 @@ export const burndown = {
         const helocLimit = helocs.reduce((s, h) => s + math.fromCurrency(h.limit), 0);
         const startAge = Math.floor(parseFloat(assumptions.currentAge) || 40);
         const results = [];
-        const ceilings = { 'Single': 65550, 'Married Filing Jointly': 131100, 'Head of Household': 90350 };
 
         for (let i = 0; i <= (100 - startAge); i++) {
             const age = startAge + i, year = new Date().getFullYear() + i, isRet = age >= rAge, infFac = Math.pow(1 + inflationRate, i);
@@ -471,10 +476,9 @@ export const burndown = {
                     floorDeductionTrace += ded;
                 });
                 
-                // Add Social Security if age >= ssStartAge
                 if (age >= ssStartAge) {
                     const ssFull = engine.calculateSocialSecurity(ssMonthly, workYears, infFac);
-                    const taxableSS = engine.calculateTaxableSocialSecurity(ssFull, floorTaxable, filingStatus);
+                    const taxableSS = engine.calculateTaxableSocialSecurity(ssFull, floorTaxable, filingStatus, infFac);
                     floorGross += ssFull;
                     floorTaxable += taxableSS;
                     floorGrossTrace += ssFull;
@@ -482,6 +486,25 @@ export const burndown = {
             }
 
             const startOfYearBal = { ...bal };
+            const reGrowth = Math.pow(1 + (assumptions.realEstateGrowth / 100), i);
+            const oaGrowth = Math.pow(1 + 0.02, i);
+            const optGrowth = Math.pow(1 + (assumptions.stockGrowth / 100), i);
+            const calcNWAtStart = () => {
+                const sRE = realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) * reGrowth), 0);
+                const sREDebt = realEstate.reduce((s, r) => s + Math.max(0, math.fromCurrency(r.mortgage) - (math.fromCurrency(r.principalPayment)*12*i)), 0);
+                const sOA = otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) * oaGrowth), 0);
+                const sOADebt = otherAssets.reduce((s, o) => s + Math.max(0, math.fromCurrency(o.loan) - (math.fromCurrency(o.principalPayment)*12*i)), 0);
+                const sOtherDebt = debts.reduce((s, d) => s + Math.max(0, math.fromCurrency(d.balance) - (math.fromCurrency(d.principalPayment)*12*i)), 0);
+                const sOptNW = stockOptions.reduce((s, x) => {
+                    const strike = math.fromCurrency(x.strikePrice);
+                    const fmv = math.fromCurrency(x.currentPrice) * optGrowth;
+                    return s + (Math.max(0, (fmv - strike) * parseFloat(x.shares)));
+                }, 0);
+                const sLiquid = startOfYearBal.cash + startOfYearBal.taxable + startOfYearBal.crypto + startOfYearBal.metals + startOfYearBal['401k'] + startOfYearBal['roth-basis'] + startOfYearBal['roth-earnings'] + startOfYearBal.hsa;
+                return (sLiquid + sRE + sOA + sOptNW) - (startOfYearBal['heloc'] + sREDebt + sOADebt + sOtherDebt);
+            };
+            const startNW = calcNWAtStart();
+
             let drawMap = {}, preTaxDraw = 0, taxes = 0, snap = 0, status = 'Silver';
             let traceLog = [];
 
@@ -493,7 +516,8 @@ export const burndown = {
             } else {
                 traceLog.push(`Household generating ${math.toCurrency(floorGrossTrace)} Gross - ${math.toCurrency(floorDeductionTrace)} Deductions = ${math.toCurrency(floorGross)} Net Base Income.`);
                 
-                let magiLimit = ceilings[filingStatus] * infFac;
+                // Dynamic ceiling replacement: Indexing benefit thresholds to 400% FPL + inflation
+                let magiLimit = fpl100 * 4.0; 
                 if (persona === 'PLATINUM') {
                     traceLog.push(`PLATINUM strategy enabled: Solving for Handout Hunter MAGI ceiling.`);
                     let low = 0, high = 300000 * infFac;
@@ -502,11 +526,12 @@ export const burndown = {
                         let testSnap = engine.calculateSnapBenefit(mid / 12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true);
                         if (testSnap * 12 >= config.snapPreserve) { magiLimit = mid; low = mid; } else { high = mid; }
                     }
-                    magiLimit = Math.min(magiLimit, ceilings[filingStatus] * infFac);
+                    magiLimit = Math.min(magiLimit, fpl100 * 4.0);
                     traceLog.push(`Determined MAGI Ceiling of ${math.toCurrency(magiLimit)} to protect benefits.`);
                 }
 
-                for (let iter = 0; iter < 5; iter++) {
+                // ADAPTIVE SOLVER: Up to 10 iterations, but breaks early if within precision targets
+                for (let iter = 0; iter < 10; iter++) {
                     bal = { ...startOfYearBal }; drawMap = {}; preTaxDraw = 0;
                     let curOrdDraw = 0, curLtcgDraw = 0;
 
@@ -525,11 +550,15 @@ export const burndown = {
                             const testTax2 = engine.calculateTax(floorTaxable + curOrdDraw + 1000, curLtcgDraw, filingStatus, assumptions.state, infFac);
                             const marginalOrd = (testTax2 - testTax1) / 1000;
                             
-                            let etr = burndown.assetMeta[pk].isTaxable ? (pk === '401k' ? marginalOrd : (1 - bR) * (0.15 + st)) : 0;
+                            // Factor in SNAP drag (~30%) into ETR estimate if we are in the aid zone to improve convergence
+                            const isSnapEligible = (floorTaxable + curOrdDraw) / 12 <= (fpl100 * 2.0 / 12);
+                            const snapDrag = isSnapEligible ? 0.30 : 0;
+                            
+                            let etr = burndown.assetMeta[pk].isTaxable ? (pk === '401k' ? marginalOrd + snapDrag : (1 - bR) * (0.15 + st + snapDrag)) : 0;
                             if (etr >= 0.9) etr = 0.5;
 
                             let draw = Math.min(av, gap / (1 - etr));
-                            if (iter === 4 && loggable) traceLog.push(`Drawing ${math.toCurrency(draw)} from ${burndown.assetMeta[pk].label}. Marginal drag estimated at ${Math.round(etr*100)}%. Remaining gap: ${math.toCurrency(gap-draw)}`);
+                            if (iter === 9 && loggable) traceLog.push(`Drawing ${math.toCurrency(draw)} from ${burndown.assetMeta[pk].label}. Marginal drag estimated at ${Math.round(etr*100)}%. Remaining gap: ${math.toCurrency(gap-draw)}`);
                             
                             if (pk === 'heloc') bal['heloc'] += draw;
                             else {
@@ -544,7 +573,6 @@ export const burndown = {
 
                     if (persona === 'PLATINUM') {
                         for (const pk of ['taxable', 'crypto', 'metals']) {
-                            // Check gap before opportunistic MAGI drawing to prevent account emptying
                             const currentNetPre = (floorGross + preTaxDraw + snap) - taxes;
                             const budgetGap = targetBudget - currentNetPre;
                             if (budgetGap <= 10) break;
@@ -553,10 +581,8 @@ export const burndown = {
                             if (curMAGI >= magiLimit) break;
                             let bR = bal[pk] > 0 ? bal[pk+'Basis'] / bal[pk] : 1;
                             
-                            // Don't draw more than needed to hit MAGI limit OR close the budget gap
                             let pullAllowedByMAGI = (magiLimit - curMAGI) / (1 - bR);
-                            let pullNeededForGap = budgetGap / 0.98; // Very close net-to-gross for these assets
-
+                            let pullNeededForGap = budgetGap / 0.98;
                             let pull = Math.min(bal[pk], pullAllowedByMAGI, pullNeededForGap);
 
                             if (pull > 1) {
@@ -564,12 +590,24 @@ export const burndown = {
                                 drawMap[pk] = (drawMap[pk] || 0) + pull; preTaxDraw += pull; curLtcgDraw += (pull * (1 - bR));
                             }
                         }
-                        solveWaterfall(['cash', 'roth-basis', 'hsa', 'heloc', '401k', 'roth-earnings'], iter === 4);
+                        const standardOrderedRemaining = burndown.priorityOrder.filter(k => !['taxable', 'crypto', 'metals'].includes(k));
+                        const finalOrder = [...standardOrderedRemaining];
+                        const idxHSA = finalOrder.indexOf('hsa'), idxHELOC = finalOrder.indexOf('heloc');
+                        if (idxHSA !== -1 && idxHELOC !== -1 && idxHELOC > idxHSA) {
+                             finalOrder.splice(idxHELOC, 1); finalOrder.splice(idxHSA, 0, 'heloc');
+                        }
+                        solveWaterfall(finalOrder, iter === 9);
                     } else {
-                        solveWaterfall(burndown.priorityOrder, iter === 4);
+                        solveWaterfall(burndown.priorityOrder, iter === 9);
                     }
                     taxes = engine.calculateTax(floorTaxable + curOrdDraw, curLtcgDraw, filingStatus, assumptions.state, infFac);
-                    snap = engine.calculateSnapBenefit(floorTaxable / 12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
+                    snap = engine.calculateSnapBenefit((floorTaxable + curOrdDraw) / 12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
+
+                    // ADAPTIVE BREAKERS
+                    const iterPostTax = (floorGross + preTaxDraw + snap) - taxes;
+                    const iterError = Math.abs(iterPostTax - targetBudget) / targetBudget;
+                    if (iter >= 2 && iterError <= 0.005) break; // Within 0.5% at 3 passes
+                    if (iter >= 4 && iterError <= 0.01) break;  // Within 1.0% at 5 passes
                 }
                 const fMAGI = floorTaxable + (drawMap['401k'] || 0) + ((drawMap['taxable']||0)*(1-(startOfYearBal.taxableBasis/startOfYearBal.taxable||1)));
                 status = (age >= 65 ? 'Medicare' : (fMAGI/fpl100 <= 1.38 ? 'Platinum' : 'Silver'));
@@ -577,49 +615,21 @@ export const burndown = {
             }
 
             const postTaxInc = (floorGross + preTaxDraw + snap) - taxes;
-
-            // --- Error Check ---
-            if (isRet && status !== 'INSOLVENT' && status !== 'ERROR') {
-                const diff = Math.abs(postTaxInc - targetBudget);
-                if (diff > (targetBudget * 0.01)) {
-                    status = 'ERROR';
-                }
+            // marking as ERROR if over 2% threshold after 10 passes
+            if (isRet && status !== 'INSOLVENT' && status !== 'ERROR' && Math.abs(postTaxInc - targetBudget) > (targetBudget * 0.02)) {
+                status = 'ERROR';
             }
             
-            const reGrowth = Math.pow(1 + (assumptions.realEstateGrowth / 100), i);
-            const oaGrowth = Math.pow(1 + 0.02, i);
-            const curRE = realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) * reGrowth), 0);
-            const curREDebt = realEstate.reduce((s, r) => s + Math.max(0, math.fromCurrency(r.mortgage) - (math.fromCurrency(r.principalPayment)*12*i)), 0);
-            const curOA = otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) * oaGrowth), 0);
-            const curOADebt = otherAssets.reduce((s, o) => s + Math.max(0, math.fromCurrency(o.loan) - (math.fromCurrency(o.principalPayment)*12*i)), 0);
-            const curOtherDebt = debts.reduce((s, d) => s + Math.max(0, math.fromCurrency(d.balance) - (math.fromCurrency(d.principalPayment)*12*i)), 0);
-            
-            // Stock options growth logic for NW
-            const optGrowth = Math.pow(1 + (assumptions.stockGrowth / 100), i);
-            const optionsNWValue = stockOptions.reduce((s, x) => {
-                const strike = math.fromCurrency(x.strikePrice);
-                const fmv = math.fromCurrency(x.currentPrice) * optGrowth;
-                return s + (Math.max(0, (fmv - strike) * parseFloat(x.shares)));
-            }, 0);
-
             const liquid = bal.cash + bal.taxable + bal.crypto + bal.metals + bal['401k'] + bal['roth-basis'] + bal['roth-earnings'] + bal.hsa;
-            const curNW = (liquid + curRE + curOA + optionsNWValue) - (bal['heloc'] + curREDebt + curOADebt + curOtherDebt);
+            const curNW = (liquid + realEstate.reduce((s, r) => s + (math.fromCurrency(r.value) * reGrowth), 0) + otherAssets.reduce((s, o) => s + (math.fromCurrency(o.value) * oaGrowth), 0) + stockOptions.reduce((s, x) => s + (Math.max(0, (math.fromCurrency(x.currentPrice) * optGrowth - math.fromCurrency(x.strikePrice)) * parseFloat(x.shares))), 0)) - (bal['heloc'] + realEstate.reduce((s, r) => s + Math.max(0, math.fromCurrency(r.mortgage) - (math.fromCurrency(r.principalPayment)*12*i)), 0) + otherAssets.reduce((s, o) => s + Math.max(0, math.fromCurrency(o.loan) - (math.fromCurrency(o.principalPayment)*12*i)), 0) + debts.reduce((s, d) => s + Math.max(0, math.fromCurrency(d.balance) - (math.fromCurrency(d.principalPayment)*12*i)), 0));
 
             if (liquid < 1000 && firstInsolvencyAge === null) firstInsolvencyAge = age;
             if (liquid < 1000) status = 'INSOLVENT';
 
             results.push({ 
-                age, year, 
-                budget: targetBudget, 
-                helocInt: helocInterestThisYear,
-                isFirstRetYear: age === rAge, 
-                preTaxDraw, taxes, snap, 
-                balances: { ...bal }, 
-                draws: drawMap, 
-                postTaxInc, status, 
-                netWorth: curNW,
-                floorGross,
-                traceLog
+                age, year, budget: targetBudget, helocInt: helocInterestThisYear, isFirstRetYear: age === rAge, 
+                preTaxDraw, taxes, snap, balances: { ...bal }, draws: drawMap, postTaxInc, status, 
+                netWorth: curNW, startNW, floorGross, traceLog
             });
         }
         return results;
@@ -627,8 +637,14 @@ export const burndown = {
 
     renderTable: (results) => {
         const infRate = (window.currentData.assumptions.inflation || 3) / 100;
-        const columns = burndown.priorityOrder;
-        
+        const strategyMode = document.getElementById('persona-selector')?.dataset.value || 'RAW';
+        let columns = [...burndown.priorityOrder];
+        if (strategyMode === 'PLATINUM') {
+            const harvestables = ['taxable', 'crypto', 'metals'];
+            columns = [...columns.filter(k => harvestables.includes(k)), ...columns.filter(k => !harvestables.includes(k))];
+            const idxHSA = columns.indexOf('hsa'), idxHELOC = columns.indexOf('heloc');
+            if (idxHSA !== -1 && idxHELOC !== -1 && idxHELOC > idxHSA) { columns.splice(idxHELOC, 1); columns.splice(idxHSA, 0, 'heloc'); }
+        }
         const header = `<tr class="sticky top-0 bg-[#1e293b] !text-slate-500 label-std z-20 border-b border-white/5">
             <th class="p-2 w-10 text-center !bg-[#1e293b]">Age</th>
             <th class="p-2 text-center !bg-[#1e293b]">Budget</th>
@@ -642,31 +658,21 @@ export const burndown = {
             <th class="p-2 text-center !bg-[#1e293b]">Post-Tax Inc</th>
             <th class="p-2 text-center !bg-[#1e293b] text-teal-400">Net Worth</th>
         </tr>`;
-        
         const rows = results.map((r, i) => {
             const inf = isRealDollars ? Math.pow(1 + infRate, i) : 1;
             const formatVal = (v) => math.toSmartCompactCurrency(v / inf);
             let badgeClass = r.status === 'INSOLVENT' || r.status === 'ERROR' ? 'bg-red-600 text-white' : (r.status === 'Platinum' ? 'bg-emerald-500 text-white' : (r.status === 'Active' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-400'));
-            
             const assetGap = Math.max(0, r.budget - r.floorGross - r.snap);
-
             return `<tr class="border-b border-white/5 hover:bg-white/5 text-[9px] ${r.status === 'ERROR' ? 'bg-red-900/10' : ''}">
                 <td class="p-2 text-center font-bold">${r.age}</td>
-                <td class="p-2 text-center">
-                    <div class="${r.isFirstRetYear ? 'text-white' : 'text-slate-400'}">${formatVal(r.budget)}</div>
-                    ${r.isFirstRetYear ? '<div class="text-[7px] font-black text-amber-500 uppercase leading-none mt-0.5">Ret Year</div>' : ''}
-                    ${r.helocInt > 10 ? `<div class="text-[7px] font-black text-orange-400 uppercase leading-none mt-0.5">+${formatVal(r.helocInt)} HELOC INT</div>` : ''}
-                </td>
+                <td class="p-2 text-center"><div class="${r.isFirstRetYear ? 'text-white' : 'text-slate-400'}">${formatVal(r.budget)}</div>${r.isFirstRetYear ? '<div class="text-[7px] font-black text-amber-500 uppercase leading-none mt-0.5">Ret Year</div>' : ''}${r.helocInt > 10 ? `<div class="text-[7px] font-black text-orange-400 uppercase leading-none mt-0.5">+${formatVal(r.helocInt)} HELOC INT</div>` : ''}</td>
                 <td class="p-2 text-center"><span class="px-2 py-0.5 rounded-[4px] text-[7px] font-black uppercase tracking-wider ${badgeClass}">${r.status}</span></td>
                 <td class="p-2 text-center text-teal-400 font-bold">${formatVal(r.floorGross)}</td>
                 <td class="p-2 text-center text-emerald-500 font-bold">${formatVal(r.snap)}</td>
                 <td class="p-2 text-center text-orange-400 font-black">${formatVal(assetGap)}</td>
                 <td class="p-2 text-center text-white font-bold">${formatVal(r.preTaxDraw)}</td>
                 <td class="p-2 text-center text-red-400 font-bold">${formatVal(r.taxes)}</td>
-                ${columns.map(k => `<td class="p-1.5 text-center leading-tight">
-                    <div class="font-black" style="color: ${r.draws[k] > 0 ? burndown.assetMeta[k].color : '#475569'}">${r.draws[k] > 1 ? formatVal(r.draws[k]) : '$0'}</div>
-                    <div class="text-slate-600 text-[7px] font-bold">${formatVal(r.balances[k] || 0)}</div>
-                </td>`).join('')}
+                ${columns.map(k => `<td class="p-1.5 text-center leading-tight"><div class="font-black" style="color: ${r.draws[k] > 0 ? burndown.assetMeta[k].color : '#475569'}">${r.draws[k] > 1 ? formatVal(r.draws[k]) : '$0'}</div><div class="text-slate-600 text-[7px] font-bold">${formatVal(r.balances[k] || 0)}</div></td>`).join('')}
                 <td class="p-2 text-center font-black text-white">${formatVal(r.postTaxInc)}</td>
                 <td class="p-2 text-center font-black text-teal-400 bg-teal-400/5">${math.toSmartCompactCurrency(r.netWorth / inf)}</td>
             </tr>`;
