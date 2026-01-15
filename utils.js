@@ -1,3 +1,4 @@
+
 export const generateId = () => Date.now().toString(36) + Math.random().toString(36).substring(2);
 
 export const assetColors = {
@@ -345,6 +346,26 @@ export const engine = {
         if (hhSize <= 2 && (earnedMonthly + unearnedMonthly) <= 0 && benefit < 23) return 23;
         
         return benefit;
+    },
+    calculateTargetMagiForSnap: (targetBenefitMonthly, hhSize, shelterCosts, hasSUA, isDisabledOrElderly, childSupportPaid = 0, depCare = 0, medicalExps = 0, stateName = 'Michigan', inflationFactor = 1) => {
+        let low = 0;
+        let high = 500000; // Search range up to 500k monthly (absurdly high to catch all)
+        let foundMagi = 0;
+        
+        // Binary search for the highest MAGI that still yields >= targetBenefit
+        for (let i = 0; i < 20; i++) {
+            let mid = (low + high) / 2;
+            // Assume unearned income for retirement withdrawals
+            let benefit = engine.calculateSnapBenefit(0, mid, 0, hhSize, shelterCosts, hasSUA, isDisabledOrElderly, childSupportPaid, depCare, medicalExps, stateName, inflationFactor, true);
+            
+            if (benefit >= targetBenefitMonthly) {
+                foundMagi = mid;
+                low = mid; // Try higher income
+            } else {
+                high = mid; // Too much income, reduce
+            }
+        }
+        return foundMagi * 12; // Return Annual
     },
     calculateSummaries: (data) => {
         const inv = data.investments || [], options = data.stockOptions || [], re = data.realEstate || [], oa = data.otherAssets || [], helocs = data.helocs || [], debts = data.debts || [], inc = data.income || [], budget = data.budget || { savings: [], expenses: [] };
