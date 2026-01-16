@@ -70,7 +70,7 @@ export const burndown = {
                         <div id="card-preservation-sub" class="text-[9px] font-bold text-amber-500/60 uppercase tracking-tighter leading-none">STAYS SOLVENT AT CURRENT BUDGET UNTIL AGE 100+</div>
                     </div>
 
-                    <div class="bg-slate-900/50 rounded-2xl border border-slate-800 p-4 flex flex-col justify-between h-28 relative overflow-hidden">
+                    <div class="bg-slate-900/50 rounded-2xl border border-slate-800 p-4 flex flex-col justify-between h-28 relative overflow-hidden cursor-pointer hover:border-blue-500/30 transition-colors">
                         <div class="absolute right-0 top-0 p-3"><i class="fas fa-road text-4xl text-blue-400 opacity-20"></i></div>
                         <div>
                             <label class="text-[9px] font-bold text-blue-400 uppercase tracking-widest mb-1 flex items-center gap-1"><i class="fas fa-flag-checkered"></i> Retirement Runway</label>
@@ -595,8 +595,7 @@ export const burndown = {
 
             const helocInterestThisYear = bal['heloc'] * helocInterestRate;
             
-            // NOTE: We don't push to log yet because we clear/rebuild the log in the logic blocks, 
-            // but we add it to the budget here.
+            // Integrate HELOC interest into the core budget requirement to force the solver to cover it
             targetBudget += helocInterestThisYear;
 
             let floorGross = 0, floorTaxable = 0, incomeBreakdown = [];
@@ -925,7 +924,16 @@ export const burndown = {
             
             // Reinvestment Logic for Surplus: Only if significantly over budget despite solver efforts
             if (postTaxInc > targetBudget + 100) { 
-                const surplus = postTaxInc - targetBudget;
+                let surplus = postTaxInc - targetBudget;
+                
+                // Paydown Rule: Use surplus to pay down HELOC principal first
+                if (bal['heloc'] > 0) {
+                    const paydown = Math.min(bal['heloc'], surplus);
+                    bal['heloc'] -= paydown;
+                    surplus -= paydown;
+                    traceLog.push(`Surplus Income: Used ${math.toCurrency(paydown)} to pay down HELOC principal.`);
+                }
+
                 if (surplus > 0) {
                     bal['taxable'] += surplus;
                     bal['taxableBasis'] += surplus; 
@@ -993,9 +1001,10 @@ export const burndown = {
             const formatVal = (v) => math.toSmartCompactCurrency(v / inf);
             let badgeClass = r.status === 'INSOLVENT' ? 'bg-red-600 text-white' : (r.status === 'Platinum' ? 'bg-emerald-500 text-white' : (r.status === 'Active' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-400'));
             const assetGap = Math.max(0, r.budget - r.floorGross - r.snap);
+            const helocSub = r.helocInt > 50 ? `<div class="text-[7px] font-black text-amber-500 uppercase mt-0.5">HELOC ${formatVal(r.helocInt)}</div>` : '';
             return `<tr class="border-b border-white/5 hover:bg-white/5 text-[9px]">
                 <td class="p-2 text-center font-bold">${r.age}</td>
-                <td class="p-2 text-center"><div class="${r.isFirstRetYear ? 'text-white' : 'text-slate-400'}">${formatVal(r.budget)}</div></td>
+                <td class="p-2 text-center"><div class="${r.isFirstRetYear ? 'text-white' : 'text-slate-400'}">${formatVal(r.budget)}</div>${helocSub}</td>
                 <td class="p-2 text-center"><span class="px-2 py-0.5 rounded-[4px] text-[7px] font-black uppercase ${badgeClass}">${r.status}</span></td>
                 <td class="p-2 text-center text-teal-400 font-bold">${formatVal(r.floorGross)}</td>
                 <td class="p-2 text-center text-emerald-500 font-bold">${formatVal(r.snap)}</td>
