@@ -203,33 +203,45 @@ export const burndown = {
         const traceYearInput = document.getElementById('input-trace-year');
         const traceAgeInput = document.getElementById('input-trace-age');
         if (traceYearInput && traceAgeInput) {
-            const clampInputs = () => {
+            const validateTraceInputs = () => {
                 if (!fullSimulationResults.length) return;
                 const first = fullSimulationResults[0], last = fullSimulationResults[fullSimulationResults.length - 1];
                 let year = parseInt(traceYearInput.value);
-                let age = parseInt(traceAgeInput.value);
                 
-                if (year < first.year) year = first.year;
+                if (isNaN(year) || year < first.year) year = first.year;
                 if (year > last.year) year = last.year;
-                if (age < first.age) age = first.age;
-                if (age > last.age) age = last.age;
                 
                 traceYearInput.value = year;
-                traceAgeInput.value = age;
-            };
-
-            traceYearInput.oninput = () => {
-                clampInputs();
-                const match = fullSimulationResults.find(r => r.year === parseInt(traceYearInput.value));
+                const match = fullSimulationResults.find(r => r.year === year);
                 if (match) traceAgeInput.value = match.age;
                 burndown.renderTrace();
             };
-            traceAgeInput.oninput = () => {
-                clampInputs();
-                const match = fullSimulationResults.find(r => r.age === parseInt(traceAgeInput.value));
-                if (match) traceYearInput.value = match.year;
-                burndown.renderTrace();
+
+            traceYearInput.oninput = () => {
+                const val = parseInt(traceYearInput.value);
+                if (fullSimulationResults.length && !isNaN(val)) {
+                    const match = fullSimulationResults.find(r => r.year === val);
+                    if (match) {
+                        traceAgeInput.value = match.age;
+                        burndown.renderTrace();
+                    }
+                }
             };
+            traceYearInput.onchange = validateTraceInputs;
+            traceYearInput.onblur = validateTraceInputs;
+
+            traceAgeInput.oninput = () => {
+                const val = parseInt(traceAgeInput.value);
+                if (fullSimulationResults.length && !isNaN(val)) {
+                    const match = fullSimulationResults.find(r => r.age === val);
+                    if (match) {
+                        traceYearInput.value = match.year;
+                        burndown.renderTrace();
+                    }
+                }
+            };
+            traceAgeInput.onchange = validateTraceInputs; 
+            traceAgeInput.onblur = validateTraceInputs;
         }
     },
 
@@ -577,6 +589,15 @@ export const burndown = {
             const totalHhSize = 1 + (filingStatus === 'Married Filing Jointly' ? 1 : 0) + effectiveKidsCount;
             const fpl100 = math.getFPL(totalHhSize, assumptions.state) * infFac;
 
+            // --- PRIORITY SWAP: LATE RETIREMENT SAFEGUARD (Age 79 Anomaly Fix) ---
+            // If Age >= 65, force HELOC to the absolute bottom of priority list.
+            // This ensures we burn Roth Earnings / HSA before taking on new debt in late life.
+            let currentYearPriority = [...burndown.priorityOrder];
+            if (age >= 65) {
+                currentYearPriority = currentYearPriority.filter(p => p !== 'heloc');
+                currentYearPriority.push('heloc'); 
+            }
+
             let baseBudget = config.useSync ? summaries.totalAnnualBudget : config.manualBudget;
             let targetBudget = baseBudget * infFac;
 
@@ -588,32 +609,30 @@ export const burndown = {
                 targetBudget *= phaseMult;
             }
 
-            const helocInterestThisYear = bal['heloc'] * helocInterestRate;
-            
-            // Integrate HELOC interest into the core budget requirement to force the solver to cover it
-            targetBudget += helocInterestThisYear;
-
-            let floorGross = 0, floorTaxable = 0, incomeBreakdown = [];
-            let floorGrossTrace = 0, floorDeductionTrace = 0;
+            // --- SMART HELOC PAYOFF LOGIC ---
             let traceLog = [];
             
-            if (helocInterestThisYear > 50) {
-                traceLog.push(`Debt Service: ${math.toCurrency(helocInterestThisYear)} interest due on ${math.toCurrency(bal['heloc'])} HELOC balance. Added to budget.`);
-            }
-
-            // --- SMART HELOC PAYOFF LOGIC ---
             if (bal['heloc'] > 0) {
                 const currentStockRate = math.getGrowthForAge('Stock', age, assumptions.currentAge, assumptions);
                 const isArbitrage = helocInterestRate > (currentStockRate - 0.02); 
                 let helocPaydown = 0;
 
-                // RULE A: Medicare Flush (Age 65) - Unlock Roth Earnings
-                if (age === 65 && bal['roth-earnings'] > 0) {
-                    const pay = Math.min(bal['heloc'], bal['roth-earnings']);
-                    bal['heloc'] -= pay;
-                    bal['roth-earnings'] -= pay;
-                    helocPaydown += pay;
-                    traceLog.push(`Smart HELOC (Medicare Flush): Unlocked ${math.toCurrency(pay)} Roth Earnings to wipe debt at Age 65.`);
+                // RULE A: Medicare Flush (Age 65) - Unlock Roth Earnings & HSA to wipe debt
+                // This is critical to prevent the "Zombie HELOC" in late retirement.
+                if (age === 65) {
+                    if (bal['roth-earnings'] > 0) {
+                        const pay = Math.min(bal['heloc'], bal['roth-earnings']);
+                        bal['heloc'] -= pay;
+                        bal['roth-earnings'] -= pay;
+                        helocPaydown += pay;
+                    }
+                    if (bal['heloc'] > 0 && bal['hsa'] > 0) {
+                        const pay = Math.min(bal['heloc'], bal['hsa']);
+                        bal['heloc'] -= pay;
+                        bal['hsa'] -= pay;
+                        helocPaydown += pay;
+                    }
+                    if (helocPaydown > 0) traceLog.push(`Smart HELOC (Medicare Flush): Unlocked ${math.toCurrency(helocPaydown)} Roth/HSA to wipe debt at Age 65.`);
                 }
 
                 // RULE B: Ghost Money Arbitrage (Pre-65) - Cash & Roth Basis Only
@@ -635,6 +654,18 @@ export const burndown = {
                         traceLog.push(`Smart HELOC (Arbitrage): Paid down ${math.toCurrency(helocPaydown)} using Ghost Money.`);
                     }
                 }
+            }
+
+            const helocInterestThisYear = bal['heloc'] * helocInterestRate;
+            
+            // Integrate HELOC interest into the core budget requirement to force the solver to cover it
+            targetBudget += helocInterestThisYear;
+
+            let floorGross = 0, floorTaxable = 0, incomeBreakdown = [];
+            let floorGrossTrace = 0, floorDeductionTrace = 0;
+            
+            if (helocInterestThisYear > 50) {
+                traceLog.push(`Debt Service: ${math.toCurrency(helocInterestThisYear)} interest due on ${math.toCurrency(bal['heloc'])} HELOC balance. Added to budget.`);
             }
 
             // 1. INJECT ANNUAL SAVINGS (Post-Growth, Pre-Withdrawal)
@@ -810,20 +841,42 @@ export const burndown = {
                     
                     if (gap > 0) {
                         traceLog.push(`Pass 1 (MAGI Fill) complete. Gap: ${math.toCurrency(gap)}. Engaging Zero-ID assets.`);
-                        // Explicit order: Cash -> Roth Basis -> HELOC
-                        let zeroAssets = [
-                            assets.find(a => a.key === 'cash'),
-                            assets.find(a => a.key === 'roth-basis'),
-                            assets.find(a => a.key === 'heloc')
-                        ].filter(a => a); 
                         
-                        for (let asset of zeroAssets) {
+                        // Use Dynamic Priority Order here for fallback
+                        for (const pk of currentYearPriority) {
                             if (gap <= 0) break;
-                            if (asset.val <= 0) continue;
                             
-                            let draw = Math.min(gap, asset.val);
-                            bestDraws[asset.key] = (bestDraws[asset.key] || 0) + draw;
+                            // Find corresponding asset object from scan list or create dummy for HELOC
+                            let asset = assets.find(a => a.key === pk);
+                            if (!asset && pk === 'heloc') asset = { val: helocLimit - bal['heloc'], key: 'heloc' };
+                            
+                            // Skip high density assets already drained in Pass 1 unless they have remaining value
+                            // Actually, Pass 1 filled them to MAGI limit. We only want Zero Density assets here
+                            // OR high density assets if we are desperate (which means MAGI will spike)
+                            
+                            if (!asset || asset.val <= 0) continue;
+                            
+                            // Re-check if this asset was already fully utilized in Pass 1
+                            let used = bestDraws[pk] || 0;
+                            let remaining = asset.val - used;
+                            if (remaining <= 0) continue;
+
+                            let draw = Math.min(gap, remaining);
+                            bestDraws[pk] = (bestDraws[pk] || 0) + draw;
                             gap -= draw;
+                            
+                            // If we tap high density assets here, update taxes (Scenario: Desperation)
+                            if (asset.density > 0) {
+                                if (pk === '401k') currentOrdDraw += draw;
+                                else if (pk === 'metals') currentCollDraw += draw * (1 - (bal[pk+'Basis']/bal[pk]));
+                                else currentLtcgDraw += draw * (1 - (bal[pk+'Basis']/bal[pk]));
+                                
+                                // Re-calc tax impact of this desperate draw
+                                let newTaxes = engine.calculateTax(floorTaxable + currentOrdDraw, currentLtcgDraw, currentCollDraw, filingStatus, assumptions.state, infFac);
+                                let taxDrag = newTaxes - taxes;
+                                taxes = newTaxes;
+                                gap += taxDrag; // Gap widens by tax cost
+                            }
                         }
                     }
 
@@ -868,8 +921,8 @@ export const burndown = {
                     let pass1Names = magiFillAssets.filter(a => bestDraws[a.key] > 0).map(a => a.label);
                     if (pass1Names.length) traceLog.push(`Optimizer Pass 1 (MAGI Fill): Drew from ${pass1Names.join(', ')} to hit ${math.toCurrency(fMAGI)} MAGI.`);
                     
-                    let pass2Names = assets.filter(a => a.density === 0 && bestDraws[a.key] > 0).map(a => a.label);
-                    if (pass2Names.length) traceLog.push(`Optimizer Pass 2 (Budget Fill): Bridged deficit using ${pass2Names.join(', ')}.`);
+                    let pass2Names = Object.keys(bestDraws).filter(k => bestDraws[k] > 0);
+                    if (pass2Names.length) traceLog.push(`Optimizer Pass 2 (Budget Fill): Final draw set: ${pass2Names.join(', ')}.`);
 
                 } else {
                     // --- NEW SEQUENTIAL BINARY SEARCH IRON FIST ---
@@ -884,7 +937,8 @@ export const burndown = {
                     let runningLtcg = 0;
                     let runningColl = 0;
 
-                    for (const pk of burndown.priorityOrder) {
+                    // UPDATED: Iterate using dynamic yearPriority (fixing Age 79 anomaly)
+                    for (const pk of currentYearPriority) {
                         let deficit = targetBudget - currentNet;
                         if (deficit <= 1) break; // Gap is filled
 
@@ -953,22 +1007,23 @@ export const burndown = {
 
             const postTaxInc = (floorGross + preTaxDraw + snap) - taxes;
             
-            // Reinvestment Logic for Surplus: Only if significantly over budget despite solver efforts
-            if (postTaxInc > targetBudget + 100) { 
+            // Reinvestment Logic for Surplus: AGGRESSIVE PAYDOWN
+            if (postTaxInc > targetBudget) { 
                 let surplus = postTaxInc - targetBudget;
                 
-                // Paydown Rule: Use surplus to pay down HELOC principal first
+                // Aggressive Paydown: Use 100% of Surplus for HELOC first
                 if (bal['heloc'] > 0) {
                     const paydown = Math.min(bal['heloc'], surplus);
                     bal['heloc'] -= paydown;
                     surplus -= paydown;
-                    traceLog.push(`Surplus Income: Used ${math.toCurrency(paydown)} to pay down HELOC principal.`);
+                    traceLog.push(`Aggressive Surplus Paydown: Used ${math.toCurrency(paydown)} to reduce HELOC principal.`);
                 }
 
+                // Remaining surplus to Taxable Brokerage
                 if (surplus > 0) {
                     bal['taxable'] += surplus;
                     bal['taxableBasis'] += surplus; 
-                    traceLog.push(`Surplus Income: ${math.toCurrency(surplus)} exceeds budget. Reinvested into Brokerage (100% Cost Basis).`);
+                    traceLog.push(`Surplus Reinvestment: ${math.toCurrency(surplus)} added to Brokerage.`);
                 }
             }
 
