@@ -345,6 +345,7 @@ export const burndown = {
         }
 
         fullSimulationResults = burndown.simulateProjection(data, config);
+        const actualInsolvencyAge = firstInsolvencyAge;
         
         // Sync trace inputs if they don't match the new simulation start
         const ty = document.getElementById('input-trace-year');
@@ -384,6 +385,44 @@ export const burndown = {
         if (document.getElementById('burndown-table-container')) document.getElementById('burndown-table-container').innerHTML = burndown.renderTable(fullSimulationResults);
         
         burndown.renderTrace();
+        
+        // New: Calculate DWZ
+        burndown.calculateDieWithZero(data, config, actualInsolvencyAge);
+    },
+
+    calculateDieWithZero: (data, baseConfig, restoreInsolvencyAge) => {
+        let low = 0;
+        let high = 500000;
+        let best = 0;
+        
+        const solverConfig = { ...baseConfig, useSync: false };
+
+        for (let i = 0; i < 20; i++) {
+            const mid = (low + high) / 2;
+            solverConfig.manualBudget = mid;
+            
+            burndown.simulateProjection(data, solverConfig);
+            
+            if (firstInsolvencyAge !== null) {
+                // Failed (Insolvent before death)
+                high = mid;
+            } else {
+                // Survived
+                best = mid;
+                low = mid;
+            }
+        }
+        
+        // Restore global state
+        firstInsolvencyAge = restoreInsolvencyAge;
+        burndown.lastCalculatedResults.dwz = best;
+        
+        const dwzVal = document.getElementById('card-dwz-val');
+        const dwzSub = document.getElementById('card-dwz-sub');
+        const kVal = Math.round(best / 1000);
+        
+        if (dwzVal) dwzVal.textContent = math.toSmartCompactCurrency(best);
+        if (dwzSub) dwzSub.textContent = `MAX SUSTAINABLE SPEND OF $${kVal}K/YR STARTING AT RETIREMENT`;
     },
 
     renderTrace: () => {
