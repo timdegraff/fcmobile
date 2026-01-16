@@ -6,11 +6,22 @@ import { math, engine } from './utils.js';
 import { renderTable, renderTrace, renderPriorityList, updateToggleStyle, assetMeta, defaultPriorityOrder } from './burndown-render.js';
 import { simulateProjection } from './burndown-engine.js';
 import { calculateDieWithZero } from './burndown-dwz.js';
+import { PROFILE_45_COUPLE } from './profiles.js';
 
 let isRealDollars = false;
 let firstInsolvencyAge = null; 
 let fullSimulationResults = [];
 let priorityOrder = [...defaultPriorityOrder];
+
+// Debug Helper
+const log = (msg) => {
+    console.log(msg);
+    const el = document.getElementById('debug-console');
+    if (el) {
+        el.innerHTML += `<div>${new Date().toISOString().split('T')[1]} - ${msg}</div>`;
+        el.scrollTop = el.scrollHeight;
+    }
+};
 
 export const burndown = {
     getIsRealDollars: () => isRealDollars,
@@ -20,134 +31,179 @@ export const burndown = {
     assetMeta,
 
     init: () => {
-        const viewContainer = document.getElementById('burndown-view-container');
-        if (!viewContainer) return;
-
-        viewContainer.innerHTML = `
-            <div class="flex flex-col gap-2.5">
-                <div class="flex flex-col md:flex-row justify-between items-end md:items-center gap-4 mb-2 border-b border-white/5 pb-2">
-                    <div class="flex items-center gap-4 px-1">
-                        <div class="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center text-purple-400">
-                            <i class="fas fa-microchip text-sm"></i>
-                        </div>
-                        <div class="flex flex-col">
-                            <h2 class="text-xl font-bold text-white tracking-tight leading-none uppercase tracking-tighter">Burndown Engine</h2>
-                            <span class="text-[7px] font-bold text-slate-500 uppercase tracking-widest mt-1">Decumulation Logic Orchestrator</span>
-                        </div>
+        try {
+            // 1. Create Debug Overlay
+            if (!document.getElementById('debug-console')) {
+                const div = document.createElement('div');
+                div.id = 'debug-console';
+                div.style.cssText = "position:fixed; top:0; left:0; width:100%; height:300px; background:rgba(0,0,0,0.9); color:#0f0; font-family:monospace; font-size:12px; z-index:99999; overflow:auto; padding:10px; pointer-events:none;";
+                div.innerHTML = `
+                    <div style="pointer-events:auto; float:right; margin-bottom:10px;">
+                        <button id="debug-panic-btn" style="background:red; color:white; font-weight:bold; padding:5px 10px; border:1px solid white; cursor:pointer;">FORCE LOAD DEFAULTS</button>
                     </div>
+                    <div>=== DEBUG LOG STARTED ===</div>
+                `;
+                document.body.appendChild(div);
 
-                    <div class="flex items-center gap-6">
-                         <div class="flex flex-col items-end gap-1">
-                            <label class="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Retirement Age</label>
-                            <div class="flex items-center gap-2 bg-slate-900/50 p-1 rounded-lg border border-white/10">
-                                <button data-step="down" data-target="retirementAge" class="w-6 h-6 flex items-center justify-center hover:bg-slate-700 rounded text-slate-400 hover:text-white transition-colors"><i class="fas fa-minus text-[10px]"></i></button>
-                                <input type="number" data-id="retirementAge" class="bg-transparent border-none text-blue-400 font-black mono-numbers text-sm w-10 text-center outline-none" value="65">
-                                <button data-step="up" data-target="retirementAge" class="w-6 h-6 flex items-center justify-center hover:bg-slate-700 rounded text-slate-400 hover:text-white transition-colors"><i class="fas fa-plus text-[10px]"></i></button>
+                const panicBtn = document.getElementById('debug-panic-btn');
+                if (panicBtn) {
+                    panicBtn.onclick = () => {
+                        log("PANIC BUTTON CLICKED");
+                        window.currentData = JSON.parse(JSON.stringify(PROFILE_45_COUPLE));
+                        log("Defaults Injected. Forcing App Show...");
+                        const login = document.getElementById('login-screen');
+                        const app = document.getElementById('app-container');
+                        if (login) login.classList.add('hidden');
+                        if (app) app.classList.remove('hidden');
+                        burndown.run();
+                    };
+                }
+            }
+
+            log("burndown.init() called");
+
+            const viewContainer = document.getElementById('burndown-view-container');
+            if (!viewContainer) {
+                log("Warning: #burndown-view-container not found (might be on different tab?)");
+                return;
+            }
+            log("#burndown-view-container found in DOM");
+
+            viewContainer.innerHTML = `
+                <div class="flex flex-col gap-2.5">
+                    <div class="flex flex-col md:flex-row justify-between items-end md:items-center gap-4 mb-2 border-b border-white/5 pb-2">
+                        <div class="flex items-center gap-4 px-1">
+                            <div class="w-10 h-10 rounded-xl bg-purple-500/20 flex items-center justify-center text-purple-400">
+                                <i class="fas fa-microchip text-sm"></i>
                             </div>
-                         </div>
-                         
-                         <div class="flex flex-col items-center gap-1">
-                            <label class="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Currency Mode</label>
-                            <button id="toggle-burndown-real" class="px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-[9px] font-black text-slate-400 hover:text-white uppercase tracking-widest transition-all">
-                                Nominal $
-                            </button>
-                         </div>
-
-                         <div class="flex flex-col items-end gap-1">
-                            <label class="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Budget Logic</label>
-                            <div class="flex items-center gap-2">
-                                <input type="text" id="input-manual-budget" data-type="currency" inputmode="decimal" class="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-sm text-teal-400 font-bold text-right w-24 mono-numbers outline-none focus:border-blue-500 transition-all">
-                                <label class="flex items-center gap-2 cursor-pointer bg-slate-900/50 border border-white/10 px-2 py-1 rounded-lg hover:border-slate-600 transition-all">
-                                    <span class="text-[9px] font-black text-slate-400 uppercase">Sync</span>
-                                    <input type="checkbox" id="toggle-budget-sync" checked class="w-3 h-3 accent-blue-500 rounded bg-slate-800 border-slate-600">
-                                </label>
+                            <div class="flex flex-col">
+                                <h2 class="text-xl font-bold text-white tracking-tight leading-none uppercase tracking-tighter">Burndown Engine</h2>
+                                <span class="text-[7px] font-bold text-slate-500 uppercase tracking-widest mt-1">Decumulation Logic Orchestrator</span>
                             </div>
-                         </div>
-                    </div>
-                </div>
-
-                <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
-                    <div id="card-preservation" class="bg-slate-900/50 rounded-2xl border border-slate-800 p-4 flex flex-col justify-between h-28 relative overflow-hidden cursor-pointer hover:border-amber-500/30 transition-colors" title="Optimize for Legacy Preservation">
-                        <div class="absolute right-0 top-0 p-3"><i class="fas fa-infinity text-4xl text-amber-500 opacity-20"></i></div>
-                        <div>
-                            <label class="text-[9px] font-bold text-amber-500 uppercase tracking-widest mb-1 flex items-center gap-1"><i class="fas fa-shield-alt"></i> Preservation Age</label>
-                            <div id="card-preservation-val" class="text-3xl font-black text-amber-500 mono-numbers tracking-tighter">--</div>
                         </div>
-                        <div id="card-preservation-sub" class="text-[9px] font-bold text-amber-500/60 uppercase tracking-tighter leading-none">STAYS SOLVENT AT CURRENT BUDGET UNTIL AGE 100+</div>
-                    </div>
 
-                    <div class="bg-slate-900/50 rounded-2xl border border-slate-800 p-4 flex flex-col justify-between h-28 relative overflow-hidden cursor-pointer hover:border-blue-500/30 transition-colors">
-                        <div class="absolute right-0 top-0 p-3"><i class="fas fa-road text-4xl text-blue-400 opacity-20"></i></div>
-                        <div>
-                            <label class="text-[9px] font-bold text-blue-400 uppercase tracking-widest mb-1 flex items-center gap-1"><i class="fas fa-flag-checkered"></i> Retirement Runway</label>
-                            <div id="card-runway-val" class="text-3xl font-black text-blue-400 mono-numbers tracking-tighter">--</div>
-                        </div>
-                        <div id="card-runway-sub" class="text-[9px] font-bold text-blue-400/60 uppercase tracking-tighter leading-none">YEARS OF SOLVENCY REMAINING FROM TODAY</div>
-                    </div>
+                        <div class="flex items-center gap-6">
+                             <div class="flex flex-col items-end gap-1">
+                                <label class="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Retirement Age</label>
+                                <div class="flex items-center gap-2 bg-slate-900/50 p-1 rounded-lg border border-white/10">
+                                    <button data-step="down" data-target="retirementAge" class="w-6 h-6 flex items-center justify-center hover:bg-slate-700 rounded text-slate-400 hover:text-white transition-colors"><i class="fas fa-minus text-[10px]"></i></button>
+                                    <input type="number" data-id="retirementAge" class="bg-transparent border-none text-blue-400 font-black mono-numbers text-sm w-10 text-center outline-none" value="65">
+                                    <button data-step="up" data-target="retirementAge" class="w-6 h-6 flex items-center justify-center hover:bg-slate-700 rounded text-slate-400 hover:text-white transition-colors"><i class="fas fa-plus text-[10px]"></i></button>
+                                </div>
+                             </div>
+                             
+                             <div class="flex flex-col items-center gap-1">
+                                <label class="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Currency Mode</label>
+                                <button id="toggle-burndown-real" class="px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-lg text-[9px] font-black text-slate-400 hover:text-white uppercase tracking-widest transition-all">
+                                    Nominal $
+                                </button>
+                             </div>
 
-                    <div id="card-dwz" class="bg-slate-900/50 rounded-2xl border border-slate-800 p-4 flex flex-col justify-between h-28 relative overflow-hidden cursor-pointer hover:border-pink-500/30 transition-colors" title="Solve for Max Sustainable Spend">
-                        <div class="absolute right-0 top-0 p-3"><i class="fas fa-skull text-4xl text-pink-400 opacity-20"></i></div>
-                        <div>
-                            <label class="text-[9px] font-bold text-pink-400 uppercase tracking-widest mb-1 flex items-center gap-1"><i class="fas fa-glass-cheers"></i> Die With Zero</label>
-                            <div id="card-dwz-val" class="text-3xl font-black text-pink-400 mono-numbers tracking-tighter">--</div>
-                        </div>
-                        <div id="card-dwz-sub" class="text-[9px] font-bold text-pink-500/60 uppercase tracking-tighter leading-none">MAX SUSTAINABLE SPEND OF $0K STARTING AT RETIREMENT</div>
-                    </div>
-                </div>
-
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-                     <div class="bg-slate-900/30 rounded-xl border border-slate-800/50 p-3 flex flex-col justify-center h-28">
-                        <label class="text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Burn Down Engines</label>
-                        <div id="persona-selector" class="grid grid-cols-2 gap-1 p-1 bg-black/40 rounded-lg border border-white/5 h-full">
-                            <button data-mode="PLATINUM" class="rounded-md text-[10px] font-black uppercase tracking-tight transition-all flex flex-col items-center justify-center border border-transparent hover:bg-emerald-500/5">
-                                <span class="text-emerald-400 text-xs font-black">HANDOUT HUNTER</span>
-                                <span class="text-[6.5px] opacity-40 leading-none mt-1 uppercase text-center">aggressive aid maximization</span>
-                            </button>
-                            <button data-mode="RAW" class="rounded-md text-[10px] font-black uppercase tracking-tight transition-all flex flex-col items-center justify-center border border-transparent hover:bg-slate-500/5">
-                                <span class="text-slate-400 text-xs font-black">IRON FIST</span>
-                                <span class="text-[6.5px] opacity-40 leading-none mt-1 uppercase text-center">strict priority burn</span>
-                            </button>
+                             <div class="flex flex-col items-end gap-1">
+                                <label class="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Budget Logic</label>
+                                <div class="flex items-center gap-2">
+                                    <input type="text" id="input-manual-budget" data-type="currency" inputmode="decimal" class="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-sm text-teal-400 font-bold text-right w-24 mono-numbers outline-none focus:border-blue-500 transition-all">
+                                    <label class="flex items-center gap-2 cursor-pointer bg-slate-900/50 border border-white/10 px-2 py-1 rounded-lg hover:border-slate-600 transition-all">
+                                        <span class="text-[9px] font-black text-slate-400 uppercase">Sync</span>
+                                        <input type="checkbox" id="toggle-budget-sync" checked class="w-3 h-3 accent-blue-500 rounded bg-slate-800 border-slate-600">
+                                    </label>
+                                </div>
+                             </div>
                         </div>
                     </div>
 
-                    <div id="card-snap-wrapper" class="bg-slate-900/30 rounded-xl border border-slate-800/50 p-3 flex flex-col justify-between h-28 transition-all duration-300">
-                        <div class="flex justify-between items-start mb-1">
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                        <div id="card-preservation" class="bg-slate-900/50 rounded-2xl border border-slate-800 p-4 flex flex-col justify-between h-28 relative overflow-hidden cursor-pointer hover:border-amber-500/30 transition-colors" title="Optimize for Legacy Preservation">
+                            <div class="absolute right-0 top-0 p-3"><i class="fas fa-infinity text-4xl text-amber-500 opacity-20"></i></div>
                             <div>
-                                <label class="text-[9px] font-bold text-emerald-500 uppercase tracking-widest block">Food Aid Target (MAX)</label>
-                                <div id="est-snap-indicator" class="text-2xl font-black text-emerald-400 mono-numbers leading-none mt-0.5">$0</div>
+                                <label class="text-[9px] font-bold text-amber-500 uppercase tracking-widest mb-1 flex items-center gap-1"><i class="fas fa-shield-alt"></i> Preservation Age</label>
+                                <div id="card-preservation-val" class="text-3xl font-black text-amber-500 mono-numbers tracking-tighter">--</div>
                             </div>
-                            <div class="text-right">
-                                <span class="text-[7px] text-slate-500 font-black uppercase tracking-widest block">Simulation Goal</span>
-                                <span id="label-snap-preserve" class="text-[10px] font-bold text-emerald-400 mono-numbers">$0/mo</span>
+                            <div id="card-preservation-sub" class="text-[9px] font-bold text-amber-500/60 uppercase tracking-tighter leading-none">STAYS SOLVENT AT CURRENT BUDGET UNTIL AGE 100+</div>
+                        </div>
+
+                        <div class="bg-slate-900/50 rounded-2xl border border-slate-800 p-4 flex flex-col justify-between h-28 relative overflow-hidden cursor-pointer hover:border-blue-500/30 transition-colors">
+                            <div class="absolute right-0 top-0 p-3"><i class="fas fa-road text-4xl text-blue-400 opacity-20"></i></div>
+                            <div>
+                                <label class="text-[9px] font-bold text-blue-400 uppercase tracking-widest mb-1 flex items-center gap-1"><i class="fas fa-flag-checkered"></i> Retirement Runway</label>
+                                <div id="card-runway-val" class="text-3xl font-black text-blue-400 mono-numbers tracking-tighter">--</div>
+                            </div>
+                            <div id="card-runway-sub" class="text-[9px] font-bold text-blue-400/60 uppercase tracking-tighter leading-none">YEARS OF SOLVENCY REMAINING FROM TODAY</div>
+                        </div>
+
+                        <div id="card-dwz" class="bg-slate-900/50 rounded-2xl border border-slate-800 p-4 flex flex-col justify-between h-28 relative overflow-hidden cursor-pointer hover:border-pink-500/30 transition-colors" title="Solve for Max Sustainable Spend">
+                            <div class="absolute right-0 top-0 p-3"><i class="fas fa-skull text-4xl text-pink-400 opacity-20"></i></div>
+                            <div>
+                                <label class="text-[9px] font-bold text-pink-400 uppercase tracking-widest mb-1 flex items-center gap-1"><i class="fas fa-glass-cheers"></i> Die With Zero</label>
+                                <div id="card-dwz-val" class="text-3xl font-black text-pink-400 mono-numbers tracking-tighter">--</div>
+                            </div>
+                            <div id="card-dwz-sub" class="text-[9px] font-bold text-pink-500/60 uppercase tracking-tighter leading-none">MAX SUSTAINABLE SPEND OF $0K STARTING AT RETIREMENT</div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                         <div class="bg-slate-900/30 rounded-xl border border-slate-800/50 p-3 flex flex-col justify-center h-28">
+                            <label class="text-xs font-black text-slate-400 uppercase tracking-widest mb-2">Burn Down Engines</label>
+                            <div id="persona-selector" class="grid grid-cols-2 gap-1 p-1 bg-black/40 rounded-lg border border-white/5 h-full">
+                                <button data-mode="PLATINUM" class="rounded-md text-[10px] font-black uppercase tracking-tight transition-all flex flex-col items-center justify-center border border-transparent hover:bg-emerald-500/5">
+                                    <span class="text-emerald-400 text-xs font-black">HANDOUT HUNTER</span>
+                                    <span class="text-[6.5px] opacity-40 leading-none mt-1 uppercase text-center">aggressive aid maximization</span>
+                                </button>
+                                <button data-mode="RAW" class="rounded-md text-[10px] font-black uppercase tracking-tight transition-all flex flex-col items-center justify-center border border-transparent hover:bg-slate-500/5">
+                                    <span class="text-slate-400 text-xs font-black">IRON FIST</span>
+                                    <span class="text-[6.5px] opacity-40 leading-none mt-1 uppercase text-center">strict priority burn</span>
+                                </button>
                             </div>
                         </div>
-                        <input type="range" id="input-snap-preserve" min="0" max="2000" step="100" value="0" class="input-range w-full accent-emerald-500">
-                    </div>
 
-                    <div class="bg-slate-900/30 rounded-xl border border-slate-800/50 p-3 flex flex-col justify-center h-28">
-                        <div class="flex justify-between items-center mb-4">
-                            <label class="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Cash Safety Net</label>
-                            <span id="label-cash-reserve" class="text-pink-400 font-black mono-numbers text-[10px]">$25,000</span>
+                        <div id="card-snap-wrapper" class="bg-slate-900/30 rounded-xl border border-slate-800/50 p-3 flex flex-col justify-between h-28 transition-all duration-300">
+                            <div class="flex justify-between items-start mb-1">
+                                <div>
+                                    <label class="text-[9px] font-bold text-emerald-500 uppercase tracking-widest block">Food Aid Target (MAX)</label>
+                                    <div id="est-snap-indicator" class="text-2xl font-black text-emerald-400 mono-numbers leading-none mt-0.5">$0</div>
+                                </div>
+                                <div class="text-right">
+                                    <span class="text-[7px] text-slate-500 font-black uppercase tracking-widest block">Simulation Goal</span>
+                                    <span id="label-snap-preserve" class="text-[10px] font-bold text-emerald-400 mono-numbers">$0/mo</span>
+                                </div>
+                            </div>
+                            <input type="range" id="input-snap-preserve" min="0" max="2000" step="100" value="0" class="input-range w-full accent-emerald-500">
                         </div>
-                        <input type="range" id="input-cash-reserve" min="0" max="100000" step="1000" value="25000" class="input-range w-full">
+
+                        <div class="bg-slate-900/30 rounded-xl border border-slate-800/50 p-3 flex flex-col justify-center h-28">
+                            <div class="flex justify-between items-center mb-4">
+                                <label class="text-[9px] font-bold text-slate-500 uppercase tracking-widest">Cash Safety Net</label>
+                                <span id="label-cash-reserve" class="text-pink-400 font-black mono-numbers text-[10px]">$25,000</span>
+                            </div>
+                            <input type="range" id="input-cash-reserve" min="0" max="100000" step="1000" value="25000" class="input-range w-full">
+                        </div>
+                    </div>
+
+                    <div id="priority-list-wrapper" class="bg-slate-900/30 rounded-xl border border-slate-800/50 p-3 flex flex-wrap items-center gap-3 transition-opacity">
+                        <span class="text-[9px] font-black text-slate-500 uppercase tracking-widest whitespace-nowrap">Draw Priority:</span>
+                        <div id="draw-priority-list" class="flex flex-wrap items-center gap-2"></div>
+                    </div>
+
+                    <div class="card-container bg-black/20 rounded-2xl border border-white/5 overflow-hidden shadow-xl">
+                        <div id="burndown-table-container" class="max-h-[65vh] overflow-auto mono-numbers"></div>
+                        <div class="p-3 bg-slate-900/60 border-t border-white/5 text-[8px] text-slate-500 font-bold uppercase tracking-widest text-center">
+                            <i class="fas fa-info-circle mr-1"></i> DISCLAIMER: Decumulation model assumes asset withdrawals as annual lump-sums to optimize for government benefit eligibility.
+                        </div>
                     </div>
                 </div>
+            `;
+            log("View HTML injected");
+            
+            burndown.attachListeners();
+            log("Listeners attached");
 
-                <div id="priority-list-wrapper" class="bg-slate-900/30 rounded-xl border border-slate-800/50 p-3 flex flex-wrap items-center gap-3 transition-opacity">
-                    <span class="text-[9px] font-black text-slate-500 uppercase tracking-widest whitespace-nowrap">Draw Priority:</span>
-                    <div id="draw-priority-list" class="flex flex-wrap items-center gap-2"></div>
-                </div>
+            log("Attempting initial run...");
+            burndown.run();
 
-                <div class="card-container bg-black/20 rounded-2xl border border-white/5 overflow-hidden shadow-xl">
-                    <div id="burndown-table-container" class="max-h-[65vh] overflow-auto mono-numbers"></div>
-                    <div class="p-3 bg-slate-900/60 border-t border-white/5 text-[8px] text-slate-500 font-bold uppercase tracking-widest text-center">
-                        <i class="fas fa-info-circle mr-1"></i> DISCLAIMER: Decumulation model assumes asset withdrawals as annual lump-sums to optimize for government benefit eligibility.
-                    </div>
-                </div>
-            </div>
-        `;
-        burndown.attachListeners();
-        burndown.run(); 
+        } catch (e) {
+            log(`CRITICAL ERROR IN INIT: ${e.message}`);
+            console.error(e);
+        }
     },
 
     attachListeners: () => {
@@ -297,68 +353,98 @@ export const burndown = {
     }),
 
     run: () => {
-        const data = window.currentData; if (!data) return;
-        
-        const retAgeInput = document.querySelector('#tab-burndown input[data-id="retirementAge"]');
-        if (retAgeInput && data.assumptions?.retirementAge) {
-            retAgeInput.value = data.assumptions.retirementAge;
-        }
-
-        const config = burndown.scrape();
-        
-        const ben = data.benefits || {};
-        const filingStatus = data.assumptions?.filingStatus || 'Single';
-        const adults = filingStatus === 'Married Filing Jointly' ? 2 : 1;
-        const currentYear = new Date().getFullYear();
-        const effectiveKidsCount = (ben.dependents || []).filter(d => (d.birthYear + 19) >= currentYear).length;
-        const totalSize = adults + effectiveKidsCount;
-        
-        const maxSnapPossible = engine.calculateSnapBenefit(0, 0, 0, totalSize, ben.shelterCosts || 700, ben.hasSUA ?? true, ben.isDisabled ?? false, ben.childSupportPaid || 0, ben.depCare || 0, ben.medicalExps || 0, data.assumptions?.state || 'Michigan', 1, true);
-        
-        const snapIndicator = document.getElementById('est-snap-indicator');
-        if (snapIndicator) {
-            snapIndicator.textContent = math.toCurrency(maxSnapPossible);
-        }
-
-        fullSimulationResults = simulateProjection(data, config);
-        firstInsolvencyAge = fullSimulationResults.firstInsolvencyAge;
-        
-        const ty = document.getElementById('input-trace-year');
-        const ta = document.getElementById('input-trace-age');
-        if (ty && ta && fullSimulationResults.length > 0) {
-            const first = fullSimulationResults[0];
-            const currentYearVal = parseInt(ty.value);
-            const last = fullSimulationResults[fullSimulationResults.length - 1];
-            if (currentYearVal < first.year || currentYearVal > last.year) {
-                ty.value = first.year;
-                ta.value = first.age;
+        try {
+            log("burndown.run() called");
+            
+            log("Checking window.currentData type: " + typeof window.currentData);
+            const data = window.currentData; 
+            if (!data) {
+                log("Data is missing. Aborting run.");
+                return;
             }
-        }
+            
+            log("Has investments? " + (data.investments ? "YES" : "NO"));
+            log("Attempting render...");
 
-        const currentAge = parseFloat(data.assumptions.currentAge) || 40;
-        
-        if (document.getElementById('card-runway-val')) {
-            const runwayVal = firstInsolvencyAge ? (firstInsolvencyAge - currentAge) : null;
-            const el = document.getElementById('card-runway-val');
-            el.textContent = runwayVal !== null ? `${runwayVal} Years` : "Forever";
-            el.classList.remove('text-red-400');
-            el.classList.add('text-blue-400');
-        }
-        
-        if (document.getElementById('card-preservation-val')) {
-            document.getElementById('card-preservation-val').textContent = firstInsolvencyAge ? firstInsolvencyAge : "100+";
-        }
+            const retAgeInput = document.querySelector('#tab-burndown input[data-id="retirementAge"]');
+            if (retAgeInput && data.assumptions?.retirementAge) {
+                retAgeInput.value = data.assumptions.retirementAge;
+            }
 
-        if (document.getElementById('burndown-table-container')) {
-            document.getElementById('burndown-table-container').innerHTML = renderTable(fullSimulationResults, data, priorityOrder, isRealDollars, config.strategyMode);
+            const config = burndown.scrape();
+            
+            const ben = data.benefits || {};
+            const filingStatus = data.assumptions?.filingStatus || 'Single';
+            const adults = filingStatus === 'Married Filing Jointly' ? 2 : 1;
+            const currentYear = new Date().getFullYear();
+            const effectiveKidsCount = (ben.dependents || []).filter(d => (d.birthYear + 19) >= currentYear).length;
+            const totalSize = adults + effectiveKidsCount;
+            
+            const maxSnapPossible = engine.calculateSnapBenefit(0, 0, 0, totalSize, ben.shelterCosts || 700, ben.hasSUA ?? true, ben.isDisabled ?? false, ben.childSupportPaid || 0, ben.depCare || 0, ben.medicalExps || 0, data.assumptions?.state || 'Michigan', 1, true);
+            
+            const snapIndicator = document.getElementById('est-snap-indicator');
+            if (snapIndicator) {
+                snapIndicator.textContent = math.toCurrency(maxSnapPossible);
+            }
+
+            log("Calling simulateProjection...");
+            fullSimulationResults = simulateProjection(data, config);
+            log(`Simulation returned ${fullSimulationResults.length} records.`);
+
+            firstInsolvencyAge = fullSimulationResults.firstInsolvencyAge;
+            
+            const ty = document.getElementById('input-trace-year');
+            const ta = document.getElementById('input-trace-age');
+            if (ty && ta && fullSimulationResults.length > 0) {
+                const first = fullSimulationResults[0];
+                const currentYearVal = parseInt(ty.value);
+                const last = fullSimulationResults[fullSimulationResults.length - 1];
+                if (currentYearVal < first.year || currentYearVal > last.year) {
+                    ty.value = first.year;
+                    ta.value = first.age;
+                }
+            }
+
+            const currentAge = parseFloat(data.assumptions.currentAge) || 40;
+            
+            if (document.getElementById('card-runway-val')) {
+                const runwayVal = firstInsolvencyAge ? (firstInsolvencyAge - currentAge) : null;
+                const el = document.getElementById('card-runway-val');
+                el.textContent = runwayVal !== null ? `${runwayVal} Years` : "Forever";
+                el.classList.remove('text-red-400');
+                el.classList.add('text-blue-400');
+            }
+            
+            if (document.getElementById('card-preservation-val')) {
+                document.getElementById('card-preservation-val').textContent = firstInsolvencyAge ? firstInsolvencyAge : "100+";
+            }
+
+            if (document.getElementById('burndown-table-container')) {
+                document.getElementById('burndown-table-container').innerHTML = renderTable(fullSimulationResults, data, priorityOrder, isRealDollars, config.strategyMode);
+            }
+            
+            const traceYear = parseInt(ty?.value) || fullSimulationResults[0]?.year;
+            renderTrace(document.getElementById('logic-trace-container'), fullSimulationResults, traceYear);
+            
+            // Optimize DWZ
+            const dwzResult = calculateDieWithZero(data, config, burndown);
+            if (document.getElementById('card-dwz-val')) document.getElementById('card-dwz-val').textContent = math.toSmartCompactCurrency(dwzResult);
+            if (document.getElementById('card-dwz-sub')) document.getElementById('card-dwz-sub').textContent = `MAX SUSTAINABLE SPEND OF $${Math.round(dwzResult/1000)}K/YR STARTING AT RETIREMENT`;
+            
+            log("Attempting to hide #loading-overlay...");
+            // Force removal of spinner if data is present and we completed run
+            const loginScreen = document.getElementById('login-screen');
+            if (loginScreen && !loginScreen.classList.contains('hidden')) {
+                log("Hiding login screen overlay.");
+                loginScreen.classList.add('hidden');
+                document.getElementById('app-container')?.classList.remove('hidden');
+            }
+            
+            log("Run complete.");
+
+        } catch (e) {
+            log(`CRITICAL ERROR IN RUN: ${e.message} | ${e.stack}`);
+            console.error(e);
         }
-        
-        const traceYear = parseInt(ty?.value) || fullSimulationResults[0]?.year;
-        renderTrace(document.getElementById('logic-trace-container'), fullSimulationResults, traceYear);
-        
-        // Optimize DWZ
-        const dwzResult = calculateDieWithZero(data, config, burndown);
-        if (document.getElementById('card-dwz-val')) document.getElementById('card-dwz-val').textContent = math.toSmartCompactCurrency(dwzResult);
-        if (document.getElementById('card-dwz-sub')) document.getElementById('card-dwz-sub').textContent = `MAX SUSTAINABLE SPEND OF $${Math.round(dwzResult/1000)}K/YR STARTING AT RETIREMENT`;
     }
 };
