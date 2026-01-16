@@ -1,4 +1,8 @@
 
+/**
+ * Burndown Engine v4.2.0
+ * Features: RMDs (75+), Lifestyle Creep (Pre-Ret Surplus), Priority Swap (65+), Medicare Flush
+ */
 import { formatter } from './formatter.js';
 import { math, engine, assetColors, stateTaxRates } from './utils.js';
 
