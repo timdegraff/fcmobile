@@ -803,10 +803,10 @@ export const burndown = {
                     if (pass2Names.length) traceLog.push(`Optimizer Pass 2 (Budget Fill): Bridged deficit using ${pass2Names.join(', ')}.`);
 
                 } else {
-                    // --- STANDARD IRON FIST LOGIC (Fixed Scope & Panic Override) ---
+                    // --- STANDARD IRON FIST LOGIC (Fixed Scope & Solvency Priority) ---
                     let curOrdDraw = 0, curLtcgDraw = 0, curCollectiblesDraw = 0;
 
-                    for (let iter = 0; iter < 20; iter++) { // Increased iter from 15 to 20
+                    for (let iter = 0; iter < 20; iter++) { 
                         bal = { ...startOfYearBal }; drawMap = {}; preTaxDraw = 0;
                         curOrdDraw = 0; curLtcgDraw = 0; curCollectiblesDraw = 0;
 
@@ -832,16 +832,18 @@ export const burndown = {
 
                                 if (smartAdjustments[pk]) {
                                     effectiveNeeded -= smartAdjustments[pk];
-                                    // PANIC OVERRIDE: If we are late in the game (iter > 12), still have a gap > 50, have money,
-                                    // but the adjustment forces us to draw 0 (creating false insolvency), ignore the adjustment.
-                                    if (effectiveNeeded <= 0 && gap > 50 && av > 50 && iter > 12) {
-                                        effectiveNeeded = rawDrawNeeded;
-                                    }
                                 }
                                 
-                                let draw = Math.min(av, Math.max(0, effectiveNeeded * (iter >= 10 ? 1.0 : 0.8)));
+                                // FORCE SOLVENCY: If there is a budget gap > 50, we MUST draw money.
+                                // Do not let the smart adjustment (from previous surplus iterations) prevent us from filling the current deficit.
+                                // If the adjustment would reduce the draw below the raw need, we clamp it to the raw need.
+                                if (gap > 50 && effectiveNeeded < rawDrawNeeded) {
+                                    effectiveNeeded = rawDrawNeeded;
+                                }
                                 
-                                if (iter === 19 && loggable) { // Updated for new iter limit
+                                let draw = Math.min(av, Math.max(0, effectiveNeeded));
+                                
+                                if (iter === 19 && loggable) {
                                     let msg = `Drawing ${math.toCurrency(draw)} from ${burndown.assetMeta[pk].label}.`;
                                     if (['taxable', 'crypto', 'metals'].includes(pk)) {
                                         const eff = (1 - ((1 - bR) * (taxRate + (stateTaxRates[assumptions.state]?.rate || 0)))) * 100;
