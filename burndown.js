@@ -803,10 +803,10 @@ export const burndown = {
                     if (pass2Names.length) traceLog.push(`Optimizer Pass 2 (Budget Fill): Bridged deficit using ${pass2Names.join(', ')}.`);
 
                 } else {
-                    // --- STANDARD IRON FIST LOGIC (Unchanged but Scope Fixed) ---
+                    // --- STANDARD IRON FIST LOGIC (Fixed Scope & Panic Override) ---
                     let curOrdDraw = 0, curLtcgDraw = 0, curCollectiblesDraw = 0;
 
-                    for (let iter = 0; iter < 15; iter++) {
+                    for (let iter = 0; iter < 20; iter++) { // Increased iter from 15 to 20
                         bal = { ...startOfYearBal }; drawMap = {}; preTaxDraw = 0;
                         curOrdDraw = 0; curLtcgDraw = 0; curCollectiblesDraw = 0;
 
@@ -828,17 +828,26 @@ export const burndown = {
                                 let etr = burndown.assetMeta[pk].isTaxable ? (pk === '401k' ? currentDrag : (1 - bR) * (taxRate + (stateTaxRates[assumptions.state]?.rate || 0) + currentDrag)) : 0;
                                 
                                 let rawDrawNeeded = gap / (1 - Math.max(0, etr));
-                                if (smartAdjustments[pk]) rawDrawNeeded -= smartAdjustments[pk];
+                                let effectiveNeeded = rawDrawNeeded;
+
+                                if (smartAdjustments[pk]) {
+                                    effectiveNeeded -= smartAdjustments[pk];
+                                    // PANIC OVERRIDE: If we are late in the game (iter > 12), still have a gap > 50, have money,
+                                    // but the adjustment forces us to draw 0 (creating false insolvency), ignore the adjustment.
+                                    if (effectiveNeeded <= 0 && gap > 50 && av > 50 && iter > 12) {
+                                        effectiveNeeded = rawDrawNeeded;
+                                    }
+                                }
                                 
-                                let draw = Math.min(av, Math.max(0, rawDrawNeeded * (iter >= 10 ? 1.0 : 0.8)));
+                                let draw = Math.min(av, Math.max(0, effectiveNeeded * (iter >= 10 ? 1.0 : 0.8)));
                                 
-                                if (iter === 14 && loggable) {
+                                if (iter === 19 && loggable) { // Updated for new iter limit
                                     let msg = `Drawing ${math.toCurrency(draw)} from ${burndown.assetMeta[pk].label}.`;
                                     if (['taxable', 'crypto', 'metals'].includes(pk)) {
                                         const eff = (1 - ((1 - bR) * (taxRate + (stateTaxRates[assumptions.state]?.rate || 0)))) * 100;
                                         msg += ` (Tax Efficiency: ${Math.round(eff)}%)`;
                                     }
-                                    if (smartAdjustments[pk]) msg += ` (Smart Correction Applied)`;
+                                    if (smartAdjustments[pk] && draw !== rawDrawNeeded) msg += ` (Smart Correction Applied)`;
                                     traceLog.push(msg);
                                 }
                                 
@@ -854,11 +863,11 @@ export const burndown = {
                                 else if (pk === 'metals') curCollectiblesDraw += (draw * (1 - bR));
                                 else if (['taxable', 'crypto'].includes(pk)) curLtcgDraw += (draw * (1 - bR));
                                 
-                                if (draw < av) break;
+                                if (draw < av && gap <= 10) break; // Only break if we didn't drain the asset AND we filled the gap
                             }
                         };
 
-                        solveWaterfall(burndown.priorityOrder, iter === 14);
+                        solveWaterfall(burndown.priorityOrder, iter === 19);
                         
                         // Pass collectibles gain to calculateTax
                         taxes = engine.calculateTax(floorTaxable + curOrdDraw, curLtcgDraw, curCollectiblesDraw, filingStatus, assumptions.state, infFac);
