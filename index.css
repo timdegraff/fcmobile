@@ -1,3 +1,4 @@
+
 :root {
     --app-bg: #0B0F19; /* Deep Rich Dark */
     --card-bg: rgba(30, 41, 59, 0.4); /* Glassy Slate */
@@ -164,7 +165,6 @@ tbody td { padding: 4px 6px !important; vertical-align: middle; } /* Tightened v
 .text-type-crypto { color: #94a3b8 !important; }    /* Slate */
 .text-type-metals { color: #eab308 !important; }    /* Yellow/Gold */
 .text-type-hsa { color: #14b8a6 !important; }       /* Teal */
-.text-type-529 { color: #fb7185 !important; }       /* Rose */
 
 /* Utility Classes */
 .glass-panel {
