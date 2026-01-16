@@ -143,7 +143,7 @@ export function simulateProjection(data, config) {
             bal, startOfYearBal, targetBudget, rates: { heloc: helocInterestRate },
             priorityOrder: currentYearPriority, age, currentAge: assumptions.currentAge,
             filingStatus, state: assumptions.state, infFac, floorGross, floorTaxable,
-            cashFloor, helocLimit, benefits, hhSize, fpl100, traceLog, assumptions
+            cashFloor, helocLimit, benefits, hhSize: totalHhSize, fpl100, traceLog, assumptions
         };
 
         let strategyResult;
