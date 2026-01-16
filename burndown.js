@@ -334,7 +334,7 @@ export const burndown = {
         const filingStatus = data.assumptions?.filingStatus || 'Single';
         const adults = filingStatus === 'Married Filing Jointly' ? 2 : 1;
         const currentYear = new Date().getFullYear();
-        const effectiveKidsCount = (ben.dependents || []).filter(d => (d.birthYear + 19) >= currentYear).length;
+        const effectiveKidsCount = (ben.dependents || []).filter(d => (d.birthYear + 19) >= year).length;
         const totalSize = adults + effectiveKidsCount;
         
         const maxSnapPossible = engine.calculateSnapBenefit(0, 0, 0, totalSize, ben.shelterCosts || 700, ben.hasSUA ?? true, ben.isDisabled ?? false, ben.childSupportPaid || 0, ben.depCare || 0, ben.medicalExps || 0, data.assumptions?.state || 'Michigan', 1, true);
@@ -510,7 +510,12 @@ export const burndown = {
         firstInsolvencyAge = null;
         
         const summaries = engine.calculateSummaries(data);
-        const helocInterestRate = (parseFloat(helocs[0]?.rate) || 7) / 100;
+        
+        // Parsing HELOC Rate: Allow 0% but default to 7% if missing or invalid string
+        let hRateRaw = parseFloat(helocs[0]?.rate);
+        if (isNaN(hRateRaw)) hRateRaw = 7.0;
+        const helocInterestRate = hRateRaw / 100;
+
         const stateMeta = stateTaxRates[assumptions.state || 'Michigan'];
         
         let bal = {
@@ -550,11 +555,18 @@ export const burndown = {
             }
 
             const helocInterestThisYear = bal['heloc'] * helocInterestRate;
+            
+            // NOTE: We don't push to log yet because we clear/rebuild the log in the logic blocks, 
+            // but we add it to the budget here.
             targetBudget += helocInterestThisYear;
 
             let floorGross = 0, floorTaxable = 0, incomeBreakdown = [];
             let floorGrossTrace = 0, floorDeductionTrace = 0;
             let traceLog = [];
+            
+            if (helocInterestThisYear > 50) {
+                traceLog.push(`Debt Service: ${math.toCurrency(helocInterestThisYear)} interest due on ${math.toCurrency(bal['heloc'])} HELOC balance. Added to budget.`);
+            }
 
             // 1. INJECT ANNUAL SAVINGS (Post-Growth, Pre-Withdrawal)
             (budget.savings || []).forEach(sav => {
@@ -640,7 +652,7 @@ export const burndown = {
             let smartAdjustments = {};
 
             if (!isRet) {
-                taxes = engine.calculateTax(floorTaxable, 0, filingStatus, assumptions.state, infFac);
+                taxes = engine.calculateTax(floorTaxable, 0, 0, filingStatus, assumptions.state, infFac);
                 status = 'Active';
                 traceLog.push(`Household generating ${math.toCurrency(floorGrossTrace)} Gross - ${math.toCurrency(floorDeductionTrace)} Deductions = ${math.toCurrency(floorGross)} Net Base Income.`);
             } else {
@@ -692,7 +704,7 @@ export const burndown = {
                     // 2. MAGI FILL PHASE
                     // Use Taxable + 401k to reach Target MAGI (if Mandatory isn't enough)
                     bal = { ...startOfYearBal }; drawMap = {}; preTaxDraw = 0;
-                    let curOrdDraw = 0, curLtcgDraw = 0;
+                    let curOrdDraw = 0, curLtcgDraw = 0, curCollectiblesDraw = 0;
                     
                     let currentMagi = floorTaxable; // Mandatory sources
                     let magiGap = targetMagi - currentMagi;
@@ -750,7 +762,7 @@ export const burndown = {
                     for (let iter = 0; iter < 10; iter++) {
                         // Recalculate Taxes/SNAP based on current draw state
                         // Note: During this phase, MAGI doesn't change, but tax *might* if we accidentally triggered something (unlikely with these sources)
-                        taxes = engine.calculateTax(floorTaxable + curOrdDraw, curLtcgDraw, filingStatus, assumptions.state, infFac);
+                        taxes = engine.calculateTax(floorTaxable + curOrdDraw, curLtcgDraw, curCollectiblesDraw, filingStatus, assumptions.state, infFac);
                         snap = engine.calculateSnapBenefit((floorTaxable + curOrdDraw) / 12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
                         
                         const currentPostTax = (floorGross + preTaxDraw + snap) - taxes;
@@ -798,7 +810,7 @@ export const burndown = {
                         }
                     }
                     
-                    const fMAGI = floorTaxable + curOrdDraw + curLtcgDraw;
+                    const fMAGI = floorTaxable + curOrdDraw + curLtcgDraw + curCollectiblesDraw;
                     status = (age >= 65 ? 'Medicare' : (fMAGI/fpl100 <= 1.38 ? 'Platinum' : 'Silver'));
                     traceLog.push(`Final Cycle: MAGI ${math.toCurrency(fMAGI)} (${Math.round(fMAGI/fpl100*100)}% FPL). SNAP: ${math.toCurrency(snap)}/yr.`);
 
@@ -806,7 +818,7 @@ export const burndown = {
                     // --- STANDARD IRON FIST LOGIC (Unchanged) ---
                     for (let iter = 0; iter < 15; iter++) {
                         bal = { ...startOfYearBal }; drawMap = {}; preTaxDraw = 0;
-                        let curOrdDraw = 0, curLtcgDraw = 0;
+                        let curOrdDraw = 0, curLtcgDraw = 0, curCollectiblesDraw = 0;
 
                         const solveWaterfall = (pList, loggable = false) => {
                             for (const pk of pList) {
@@ -818,7 +830,14 @@ export const burndown = {
 
                                 let bR = (['taxable', 'crypto', 'metals'].includes(pk) && bal[pk] > 0) ? bal[pk+'Basis'] / bal[pk] : 1;
                                 let currentDrag = Math.min(0.85, Math.max(0, observedFriction));
-                                let etr = burndown.assetMeta[pk].isTaxable ? (pk === '401k' ? currentDrag : (1 - bR) * (0.15 + (stateTaxRates[assumptions.state]?.rate || 0) + currentDrag)) : 0;
+                                
+                                // Enhanced Tax logic for drag calculation:
+                                // If Metals, effective rate is ~28% (plus state). If LTCG, ~15% (plus state).
+                                let taxRate = 0;
+                                if (pk === 'metals') taxRate = 0.28;
+                                else if (['taxable', 'crypto'].includes(pk)) taxRate = 0.15;
+                                
+                                let etr = burndown.assetMeta[pk].isTaxable ? (pk === '401k' ? currentDrag : (1 - bR) * (taxRate + (stateTaxRates[assumptions.state]?.rate || 0) + currentDrag)) : 0;
                                 
                                 let rawDrawNeeded = gap / (1 - Math.max(0, etr));
                                 if (smartAdjustments[pk]) rawDrawNeeded -= smartAdjustments[pk];
@@ -828,8 +847,9 @@ export const burndown = {
                                 if (iter === 14 && loggable) {
                                     let msg = `Drawing ${math.toCurrency(draw)} from ${burndown.assetMeta[pk].label}.`;
                                     if (['taxable', 'crypto', 'metals'].includes(pk)) {
-                                        const eff = (1 - ((1 - bR) * (0.15 + (stateTaxRates[assumptions.state]?.rate || 0)))) * 100;
+                                        const eff = (1 - ((1 - bR) * (taxRate + (stateTaxRates[assumptions.state]?.rate || 0)))) * 100;
                                         msg += ` (Tax Efficiency: ${Math.round(eff)}%)`;
+                                        if (pk === 'metals') msg += ` [Collectibles Rate]`;
                                     }
                                     if (smartAdjustments[pk]) msg += ` (Smart Correction Applied)`;
                                     traceLog.push(msg);
@@ -841,8 +861,11 @@ export const burndown = {
                                     bal[pk] -= draw;
                                 }
                                 drawMap[pk] = (drawMap[pk] || 0) + draw; preTaxDraw += draw;
+                                
+                                // Bin the draws correctly for tax calc
                                 if (pk === '401k') curOrdDraw += draw;
-                                else if (['taxable', 'crypto', 'metals'].includes(pk)) curLtcgDraw += (draw * (1 - bR));
+                                else if (pk === 'metals') curCollectiblesDraw += (draw * (1 - bR));
+                                else if (['taxable', 'crypto'].includes(pk)) curLtcgDraw += (draw * (1 - bR));
                                 
                                 if (draw < av) break;
                             }
@@ -850,14 +873,15 @@ export const burndown = {
 
                         solveWaterfall(burndown.priorityOrder, iter === 14);
                         
-                        taxes = engine.calculateTax(floorTaxable + curOrdDraw, curLtcgDraw, filingStatus, assumptions.state, infFac);
+                        // Pass collectibles gain to calculateTax
+                        taxes = engine.calculateTax(floorTaxable + curOrdDraw, curLtcgDraw, curCollectiblesDraw, filingStatus, assumptions.state, infFac);
                         snap = engine.calculateSnapBenefit((floorTaxable + curOrdDraw) / 12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
 
                         const iterPostTax = (floorGross + preTaxDraw + snap) - taxes;
                         const surplus = iterPostTax - targetBudget;
                         const iterError = Math.abs(surplus) / targetBudget;
                         
-                        if (preTaxDraw > 100) observedFriction = Math.min(0.9, Math.max(0, 1 - ((iterPostTax - (floorGross - engine.calculateTax(floorTaxable, 0, filingStatus, assumptions.state, infFac))) / preTaxDraw)));
+                        if (preTaxDraw > 100) observedFriction = Math.min(0.9, Math.max(0, 1 - ((iterPostTax - (floorGross - engine.calculateTax(floorTaxable, 0, 0, filingStatus, assumptions.state, infFac))) / preTaxDraw)));
                         
                         const drawnKeys = Object.keys(drawMap).filter(k => drawMap[k] > 0);
                         const marginalKey = drawnKeys[drawnKeys.length - 1]; 
@@ -866,7 +890,7 @@ export const burndown = {
                         }
                         if (iter >= 4 && iterError <= 0.01) break; 
                     }
-                    const fMAGI = floorTaxable + (drawMap['401k'] || 0) + ((drawMap['taxable']||0)*(1-(startOfYearBal.taxableBasis/startOfYearBal.taxable||1)));
+                    const fMAGI = floorTaxable + (drawMap['401k'] || 0) + curLtcgDraw + curCollectiblesDraw;
                     status = (age >= 65 ? 'Medicare' : (fMAGI/fpl100 <= 1.38 ? 'Platinum' : 'Silver'));
                     traceLog.push(`Final Cycle MAGI: ${math.toCurrency(fMAGI)} (${status}).`);
                 }

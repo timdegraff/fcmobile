@@ -281,11 +281,17 @@ export const engine = {
         else if (provisionalIncome > t1) taxable = 0.5 * (provisionalIncome - t1);
         return Math.min(taxable, ssAmount * 0.85);
     },
-    calculateTax: (ordinaryIncome, ltcgIncome, status = 'Single', state = 'Michigan', inflationFactor = 1) => {
+    calculateTax: (ordinaryIncome, ltcgIncome, collectiblesGain = 0, status = 'Single', state = 'Michigan', inflationFactor = 1) => {
         const stdDedMap = { 'Single': 15000, 'Married Filing Jointly': 30000, 'Head of Household': 22500 };
         const stdDed = (stdDedMap[status] || 15000) * inflationFactor;
+        
         let taxableOrdinary = Math.max(0, ordinaryIncome - stdDed);
-        let taxableLtcg = Math.max(0, ltcgIncome - Math.max(0, stdDed - ordinaryIncome));
+        // Collectibles are taxed at ordinary rates, capped at 28%. They sit on top of ordinary income.
+        // We use the remaining standard deduction against collectibles if ordinary was 0.
+        let taxableCollectibles = Math.max(0, collectiblesGain - Math.max(0, stdDed - ordinaryIncome));
+        // Standard LTCG sits on top of both.
+        let taxableLtcg = Math.max(0, ltcgIncome - Math.max(0, stdDed - ordinaryIncome - collectiblesGain));
+
         let tax = 0;
         const a = window.currentData?.assumptions || {};
         const userLtcgRate = (a.ltcgRate || 15) / 100;
@@ -295,6 +301,8 @@ export const engine = {
             'Head of Household': [[17000, 0.10], [64850, 0.12], [103350, 0.22], [197300, 0.24], [250525, 0.32], [626350, 0.35], [Infinity, 0.37]]
         };
         const baseBrackets = brackets[status] || brackets['Single'];
+
+        // 1. Calculate Tax on Ordinary Income
         let prev = 0, remainingOrdinary = taxableOrdinary;
         for (const [limitBase, rate] of baseBrackets) {
             const limit = limitBase === Infinity ? Infinity : limitBase * inflationFactor;
@@ -304,10 +312,52 @@ export const engine = {
             prev = limit;
             if (remainingOrdinary <= 0) break;
         }
+
+        // 2. Calculate Tax on Collectibles (Metals)
+        // Stacked on top of Ordinary. Rate is Min(BracketRate, 0.28).
+        if (taxableCollectibles > 0) {
+            let currentStack = taxableOrdinary;
+            let remainingColl = taxableCollectibles;
+            
+            // Re-traverse brackets starting from currentStack
+            let prevLimit = 0;
+            for (const [limitBase, rate] of baseBrackets) {
+                const limit = limitBase === Infinity ? Infinity : limitBase * inflationFactor;
+                // Skip brackets completely below current stack
+                if (limit <= currentStack) {
+                    prevLimit = limit;
+                    continue;
+                }
+                
+                const spaceInBracket = limit - Math.max(prevLimit, currentStack);
+                const amountInBracket = Math.min(remainingColl, spaceInBracket);
+                
+                // Collectibles Tax Logic: Ordinary Rate but max 28%
+                const effectiveRate = Math.min(rate, 0.28);
+                tax += amountInBracket * effectiveRate;
+                
+                remainingColl -= amountInBracket;
+                prevLimit = limit;
+                if (remainingColl <= 0) break;
+            }
+        }
+
+        // 3. Calculate Tax on Standard LTCG (0% / 15% / 20%)
+        // Stacked on top of (Ordinary + Collectibles)
+        const totalOrdinaryStack = taxableOrdinary + taxableCollectibles;
         const ltcgZeroLimit = (status === 'Married Filing Jointly' ? 94000 : (status === 'Head of Household' ? 63000 : 47000)) * inflationFactor;
-        const ltcgInTaxableRange = Math.max(0, taxableLtcg - Math.max(0, ltcgZeroLimit - taxableOrdinary));
+        
+        // Amount of LTCG that falls into the 0% bucket (if any space left)
+        const ltcgInZeroBucket = Math.max(0, Math.min(taxableLtcg, ltcgZeroLimit - totalOrdinaryStack));
+        
+        // Remaining LTCG is taxed at user rate (default 15%, ideally logic handles 20% high earners but 15% is the user setting)
+        const ltcgInTaxableRange = taxableLtcg - ltcgInZeroBucket;
+        
         tax += (ltcgInTaxableRange * userLtcgRate);
-        tax += ((ordinaryIncome + ltcgIncome) * (stateTaxRates[state]?.rate || 0));
+        
+        // State Tax (Simplified flat rate on all income sources)
+        tax += ((ordinaryIncome + collectiblesGain + ltcgIncome) * (stateTaxRates[state]?.rate || 0));
+        
         return tax;
     },
     calculateSnapBenefit: (earnedMonthly, unearnedMonthly, liquidAssets, hhSize, shelterCosts, hasSUA, isDisabledOrElderly, childSupportPaid = 0, depCare = 0, medicalExps = 0, stateName = 'Michigan', inflationFactor = 1, overrideAssetTest = false) => {
