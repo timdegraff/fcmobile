@@ -13,7 +13,6 @@ export const assetColors = {
     'Roth Basis': '#a855f7',
     'Roth Gains': '#9333ea',
     'Crypto': '#94a3b8',
-    'Bitcoin': '#94a3b8',
     'Metals': '#eab308',
     'Real Estate': '#6366f1',
     'Other': '#64748b',

@@ -271,7 +271,7 @@ export const burndown = {
         'heloc': { label: 'HELOC', short: 'HELOC', color: assetColors['HELOC'], isTaxable: false },
         '401k': { label: '401k/IRA', short: '401k/IRA', color: assetColors['Pre-Tax (401k/IRA)'], isTaxable: true },
         'roth-earnings': { label: 'Roth Gains', short: 'Roth Gains', color: assetColors['Roth IRA'], isTaxable: false },
-        'crypto': { label: 'Bitcoin', short: 'Bitcoin', color: assetColors['Crypto'], isTaxable: true },
+        'crypto': { label: 'Crypto', short: 'Crypto', color: assetColors['Crypto'], isTaxable: true },
         'metals': { label: 'Metals', short: 'Metals', color: assetColors['Metals'], isTaxable: true },
         'hsa': { label: 'HSA', short: 'HSA', color: assetColors['HSA'], isTaxable: false }
     },
@@ -897,6 +897,19 @@ export const burndown = {
             }
 
             const postTaxInc = (floorGross + preTaxDraw + snap) - taxes;
+            
+            // Reinvestment Logic for Surplus:
+            // If we drew significantly more than needed (common in Handout Hunter to hit MAGI targets with high basis),
+            // reinvest the difference back into the Brokerage (Taxable) account to preserve Net Worth.
+            if (postTaxInc > targetBudget + 100) { // $100 buffer
+                const surplus = postTaxInc - targetBudget;
+                if (surplus > 0) {
+                    bal['taxable'] += surplus;
+                    bal['taxableBasis'] += surplus; // Reinvested cash is 100% basis
+                    traceLog.push(`Surplus Income: ${math.toCurrency(surplus)} exceeds budget. Reinvested into Brokerage (100% Cost Basis).`);
+                }
+            }
+
             if (isRet && (targetBudget - postTaxInc) > (targetBudget * 0.02)) {
                 status = 'INSOLVENT';
                 if (firstInsolvencyAge === null) firstInsolvencyAge = age;
@@ -912,7 +925,7 @@ export const burndown = {
                 { name: 'Brokerage', value: bal['taxable'], color: assetColors['Taxable'] },
                 { name: 'Roth IRA', value: bal['roth-basis'] + bal['roth-earnings'], color: assetColors['Roth IRA'] },
                 { name: '401k/IRA', value: bal['401k'], color: assetColors['Pre-Tax (401k/IRA)'] },
-                { name: 'Bitcoin', value: bal['crypto'], color: assetColors['Crypto'] },
+                { name: 'Crypto', value: bal['crypto'], color: assetColors['Crypto'] },
                 { name: 'Metals', value: bal['metals'], color: assetColors['Metals'] },
                 { name: 'HSA', value: bal['hsa'], color: assetColors['HSA'] }
             ];
