@@ -803,10 +803,10 @@ export const burndown = {
                     if (pass2Names.length) traceLog.push(`Optimizer Pass 2 (Budget Fill): Bridged deficit using ${pass2Names.join(', ')}.`);
 
                 } else {
-                    // --- STANDARD IRON FIST LOGIC (Fixed Scope & Solvency Priority) ---
+                    // --- STANDARD IRON FIST LOGIC (Revised for Surplus Elimination) ---
                     let curOrdDraw = 0, curLtcgDraw = 0, curCollectiblesDraw = 0;
 
-                    for (let iter = 0; iter < 20; iter++) { 
+                    for (let iter = 0; iter < 25; iter++) { // Increased max iterations for better convergence
                         bal = { ...startOfYearBal }; drawMap = {}; preTaxDraw = 0;
                         curOrdDraw = 0; curLtcgDraw = 0; curCollectiblesDraw = 0;
 
@@ -814,7 +814,7 @@ export const burndown = {
                             for (const pk of pList) {
                                 const currentNet = (floorGross + preTaxDraw + snap) - taxes;
                                 const gap = targetBudget - currentNet;
-                                if (gap <= 10) break;
+                                if (gap <= 10) break; // Keep drawing until gap is tiny
                                 const av = (pk === 'cash' ? Math.max(0, bal[pk] - cashFloor) : (pk === 'heloc' ? Math.max(0, helocLimit - bal[pk]) : bal[pk]));
                                 if (av <= 1) continue;
 
@@ -834,16 +834,14 @@ export const burndown = {
                                     effectiveNeeded -= smartAdjustments[pk];
                                 }
                                 
-                                // FORCE SOLVENCY: If there is a budget gap > 50, we MUST draw money.
-                                // Do not let the smart adjustment (from previous surplus iterations) prevent us from filling the current deficit.
-                                // If the adjustment would reduce the draw below the raw need, we clamp it to the raw need.
+                                // FORCE SOLVENCY: If Deficit exists (Gap > 50), preserve logic to ensure we draw enough.
                                 if (gap > 50 && effectiveNeeded < rawDrawNeeded) {
                                     effectiveNeeded = rawDrawNeeded;
                                 }
                                 
                                 let draw = Math.min(av, Math.max(0, effectiveNeeded));
                                 
-                                if (iter === 19 && loggable) {
+                                if (iter === 24 && loggable) {
                                     let msg = `Drawing ${math.toCurrency(draw)} from ${burndown.assetMeta[pk].label}.`;
                                     if (['taxable', 'crypto', 'metals'].includes(pk)) {
                                         const eff = (1 - ((1 - bR) * (taxRate + (stateTaxRates[assumptions.state]?.rate || 0)))) * 100;
@@ -865,13 +863,12 @@ export const burndown = {
                                 else if (pk === 'metals') curCollectiblesDraw += (draw * (1 - bR));
                                 else if (['taxable', 'crypto'].includes(pk)) curLtcgDraw += (draw * (1 - bR));
                                 
-                                if (draw < av && gap <= 10) break; // Only break if we didn't drain the asset AND we filled the gap
+                                if (draw < av && gap <= 10) break; 
                             }
                         };
 
-                        solveWaterfall(burndown.priorityOrder, iter === 19);
+                        solveWaterfall(burndown.priorityOrder, iter === 24);
                         
-                        // Pass collectibles gain to calculateTax
                         taxes = engine.calculateTax(floorTaxable + curOrdDraw, curLtcgDraw, curCollectiblesDraw, filingStatus, assumptions.state, infFac);
                         snap = engine.calculateSnapBenefit((floorTaxable + curOrdDraw) / 12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
 
@@ -883,10 +880,21 @@ export const burndown = {
                         
                         const drawnKeys = Object.keys(drawMap).filter(k => drawMap[k] > 0);
                         const marginalKey = drawnKeys[drawnKeys.length - 1]; 
+                        
                         if (marginalKey && iterError > 0.005) {
-                            smartAdjustments[marginalKey] = (smartAdjustments[marginalKey] || 0) + (surplus / (1 - observedFriction) * 0.8);
+                            // Aggressive dampening if surplus exists to prevent over-withdrawal
+                            let correctionFactor = 0.8;
+                            if (iter > 10) correctionFactor = 1.0;
+                            if (iter > 15) correctionFactor = 1.2; 
+                            
+                            // If Surplus > 0, we drew too much. Increase smartAdjustment (which reduces draw).
+                            // If Surplus < 0, we drew too little. smartAdjustment can be negative (increasing draw), handled here as well.
+                            // smartAdjustments acts as a penalty term. 
+                            
+                            const reduction = (surplus / (1 - observedFriction)) * correctionFactor;
+                            smartAdjustments[marginalKey] = (smartAdjustments[marginalKey] || 0) + reduction;
                         }
-                        if (iter >= 4 && iterError <= 0.01) break; 
+                        if (iter >= 4 && iterError <= 0.005) break; 
                     }
                     const fMAGI = floorTaxable + (drawMap['401k'] || 0) + curLtcgDraw + curCollectiblesDraw;
                     status = (age >= 65 ? 'Medicare' : (fMAGI/fpl100 <= 1.38 ? 'Platinum' : 'Silver'));
@@ -896,14 +904,12 @@ export const burndown = {
 
             const postTaxInc = (floorGross + preTaxDraw + snap) - taxes;
             
-            // Reinvestment Logic for Surplus:
-            // If we drew significantly more than needed (common in Handout Hunter to hit MAGI targets with high basis),
-            // reinvest the difference back into the Brokerage (Taxable) account to preserve Net Worth.
-            if (postTaxInc > targetBudget + 100) { // $100 buffer
+            // Reinvestment Logic for Surplus: Only if significantly over budget despite solver efforts
+            if (postTaxInc > targetBudget + 100) { 
                 const surplus = postTaxInc - targetBudget;
                 if (surplus > 0) {
                     bal['taxable'] += surplus;
-                    bal['taxableBasis'] += surplus; // Reinvested cash is 100% basis
+                    bal['taxableBasis'] += surplus; 
                     traceLog.push(`Surplus Income: ${math.toCurrency(surplus)} exceeds budget. Reinvested into Brokerage (100% Cost Basis).`);
                 }
             }
