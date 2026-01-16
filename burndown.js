@@ -716,6 +716,20 @@ export const burndown = {
                 income.forEach(processIncome);
             } else {
                 income.filter(inc => inc.remainsInRetirement).forEach(processIncome);
+                
+                // RMD Enforcement (Age 75+)
+                if (age >= 75 && bal['401k'] > 0) {
+                    const rmd = engine.calculateRMD(bal['401k'], age);
+                    if (rmd > 0) {
+                        floorGross += rmd;
+                        floorTaxable += rmd;
+                        floorGrossTrace += rmd;
+                        bal['401k'] = Math.max(0, bal['401k'] - rmd);
+                        incomeBreakdown.push({ name: 'RMD (401k/IRA)', amount: rmd });
+                        traceLog.push(`RMD: Mandatory withdrawal of ${math.toCurrency(rmd)} from Pre-Tax at Age ${age}.`);
+                    }
+                }
+
                 if (age >= ssStartAge) {
                     const ssFull = engine.calculateSocialSecurity(ssMonthly, workYears, infFac);
                     const taxableSS = engine.calculateTaxableSocialSecurity(ssFull, floorTaxable, filingStatus, assumptions.state, infFac);
