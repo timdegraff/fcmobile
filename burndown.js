@@ -441,6 +441,8 @@ export const burndown = {
             }
             
             log("Run complete.");
+            const debugEl = document.getElementById('debug-console');
+            if (debugEl) debugEl.style.display = 'none';
 
         } catch (e) {
             log(`CRITICAL ERROR IN RUN: ${e.message} | ${e.stack}`);
