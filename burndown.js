@@ -588,15 +588,56 @@ export const burndown = {
                 targetBudget *= phaseMult;
             }
 
+            // EARLY TRACE INIT FOR SMART HELOC LOGIC
+            let floorGross = 0, floorTaxable = 0, incomeBreakdown = [];
+            let floorGrossTrace = 0, floorDeductionTrace = 0;
+            let traceLog = [];
+
+            // --- SMART HELOC PAYOFF LOGIC (V5.1) ---
+            if (bal['heloc'] > 0) {
+                const currentStockRate = math.getGrowthForAge('Stock', age, assumptions.currentAge, assumptions);
+                const isArbitrage = helocInterestRate > (currentStockRate - 0.02); 
+                let helocPaydown = 0;
+
+                // RULE A: Medicare Flush (Age 65) - Unlock Roth Earnings
+                if (age === 65 && bal['roth-earnings'] > 0) {
+                    const pay = Math.min(bal['heloc'], bal['roth-earnings']);
+                    bal['heloc'] -= pay;
+                    bal['roth-earnings'] -= pay;
+                    helocPaydown += pay;
+                    traceLog.push(`Smart HELOC (Medicare Flush): Unlocked ${math.toCurrency(pay)} Roth Earnings to wipe debt at Age 65.`);
+                }
+
+                // RULE B: Ghost Money Arbitrage (Pre-65) - Cash & Roth Basis Only
+                if (bal['heloc'] > 0 && age < 65 && isArbitrage) {
+                    // Priority 1: Excess Cash
+                    const availCash = Math.max(0, bal['cash'] - cashFloor);
+                    const payCash = Math.min(bal['heloc'], availCash);
+                    if (payCash > 0) {
+                        bal['heloc'] -= payCash;
+                        bal['cash'] -= payCash;
+                        helocPaydown += payCash;
+                    }
+
+                    // Priority 2: Roth Basis (No Tax/MAGI Impact)
+                    if (bal['heloc'] > 0 && bal['roth-basis'] > 0) {
+                        const payRoth = Math.min(bal['heloc'], bal['roth-basis']);
+                        bal['heloc'] -= payRoth;
+                        bal['roth-basis'] -= payRoth;
+                        helocPaydown += payRoth;
+                    }
+
+                    if (helocPaydown > 0) {
+                        traceLog.push(`Smart HELOC (Arbitrage): Paid down ${math.toCurrency(helocPaydown)} using Ghost Money. Debt ${(helocInterestRate*100).toFixed(1)}% > Market ${(currentStockRate*100).toFixed(1)}% - 2%.`);
+                    }
+                }
+            }
+
             const helocInterestThisYear = bal['heloc'] * helocInterestRate;
             
             // Integrate HELOC interest into the core budget requirement to force the solver to cover it
             targetBudget += helocInterestThisYear;
 
-            let floorGross = 0, floorTaxable = 0, incomeBreakdown = [];
-            let floorGrossTrace = 0, floorDeductionTrace = 0;
-            let traceLog = [];
-            
             if (helocInterestThisYear > 50) {
                 traceLog.push(`Debt Service: ${math.toCurrency(helocInterestThisYear)} interest due on ${math.toCurrency(bal['heloc'])} HELOC balance. Added to budget.`);
             }
@@ -692,16 +733,11 @@ export const burndown = {
                 traceLog.push(`Household base income sources: ${incomeBreakdown.map(ib => `${ib.name} (${math.toCurrency(ib.amount)})`).join(', ')}.`);
                 
                 if (persona === 'PLATINUM') {
-                    // --- DUAL MAGI ACCOUNTING & SMART CLIFF LOGIC (V5.0 UPGRADE) ---
-                    // Strategy: Fill MAGI "Net Room" with High-Density assets to launder money at low tax rates.
-                    // If budget gap remains, use Zero-Density "Buffer" assets.
-                    // If buffer is empty, pivot to "Smart Cliff" check.
-
+                    // --- DUAL MAGI ACCOUNTING & SMART CLIFF LOGIC (V5.0) ---
                     const magiLimit = fpl100 * 1.38; // Platinum Ceiling
                     const mandatoryMagi = floorTaxable; 
                     
                     // 1. Asset Classification
-                    // Density = MAGI generated per $1 of liquidity drawn.
                     let assets = [
                         { key: '401k', type: 'Ordinary', val: bal['401k'], basis: 0, density: 1.0, label: '401k/IRA' },
                         { key: 'metals', type: 'Collectibles', val: bal['metals'], basis: bal['metalsBasis'], density: 0, label: 'Metals' },
@@ -905,7 +941,6 @@ export const burndown = {
 
                 } else {
                     // --- NEW SEQUENTIAL BINARY SEARCH IRON FIST ---
-                    // Spot-on decumulation: solves for each asset in priority order.
                     let currentTaxes = engine.calculateTax(floorTaxable, 0, 0, filingStatus, assumptions.state, infFac);
                     let currentSnap = engine.calculateSnapBenefit(floorTaxable / 12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
                     let currentNet = floorGross + currentSnap - currentTaxes;
@@ -1051,3 +1086,39 @@ export const burndown = {
     },
 
     renderTable: (results) => {
+        if (!results || results.length === 0) return '';
+        return `
+            <table class="w-full text-xs border-collapse">
+                <thead class="bg-slate-900/50 text-slate-500 label-std">
+                    <tr>
+                        <th class="px-3 py-2 text-left">Age</th>
+                        <th class="px-3 py-2 text-left w-24">Status</th>
+                        <th class="px-3 py-2 text-right">Budget</th>
+                        <th class="px-3 py-2 text-right">Base Inc</th>
+                        <th class="px-3 py-2 text-right text-teal-400">Withdraw</th>
+                        <th class="px-3 py-2 text-right text-emerald-400">SNAP</th>
+                        <th class="px-3 py-2 text-right text-red-400">Taxes</th>
+                        <th class="px-3 py-2 text-right text-blue-400">Net Worth</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-white/5">
+                    ${results.map(r => {
+                        const statusColor = r.status === 'Platinum' || r.status === 'Medicare' ? 'text-emerald-400' : (r.status === 'INSOLVENT' ? 'text-red-500' : 'text-blue-400');
+                        return `
+                        <tr class="hover:bg-white/5 transition-colors ${r.isFirstRetYear ? 'bg-blue-500/10' : ''}">
+                            <td class="px-3 py-2 font-black text-white">${r.age}</td>
+                            <td class="px-3 py-2 font-bold ${statusColor} uppercase tracking-tight text-[10px]">${r.status}</td>
+                            <td class="px-3 py-2 text-right text-slate-300 font-bold">${math.toCurrency(r.budget, true)}</td>
+                            <td class="px-3 py-2 text-right text-slate-400">${math.toCurrency(r.floorGross, true)}</td>
+                            <td class="px-3 py-2 text-right text-teal-400 font-black">${math.toCurrency(r.preTaxDraw, true)}</td>
+                            <td class="px-3 py-2 text-right text-emerald-400 font-bold">${math.toCurrency(r.snap, true)}</td>
+                            <td class="px-3 py-2 text-right text-red-400 opacity-80">-${math.toCurrency(r.taxes, true)}</td>
+                            <td class="px-3 py-2 text-right text-blue-400 font-black">${math.toSmartCompactCurrency(r.netWorth)}</td>
+                        </tr>
+                        `;
+                    }).join('')}
+                </tbody>
+            </table>
+        `;
+    }
+};
