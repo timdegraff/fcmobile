@@ -692,148 +692,216 @@ export const burndown = {
                 traceLog.push(`Household base income sources: ${incomeBreakdown.map(ib => `${ib.name} (${math.toCurrency(ib.amount)})`).join(', ')}.`);
                 
                 if (persona === 'PLATINUM') {
-                    // --- HANDOUT HUNTER: MULTI-PASS ITERATIVE OPTIMIZER (V4.5 UPGRADE) ---
-                    // Strategy: Fill MAGI "Net Room" with High-Income-Density assets first to utilize low tax brackets.
-                    // Then fill remaining budget gap with Zero-Income-Density assets.
+                    // --- DUAL MAGI ACCOUNTING & SMART CLIFF LOGIC (V5.0 UPGRADE) ---
+                    // Strategy: Fill MAGI "Net Room" with High-Density assets to launder money at low tax rates.
+                    // If budget gap remains, use Zero-Density "Buffer" assets.
+                    // If buffer is empty, pivot to "Smart Cliff" check.
 
-                    // 1. Calibration: Define MAGI Ceiling & Net Room
-                    const magiLimit = fpl100 * 1.38; // 138% FPL Ceiling for Medicaid/ACA Max
-                    const mandatoryMagi = floorTaxable; // From fixed income sources
-                    let netMagiRoom = Math.max(0, magiLimit - mandatoryMagi);
-                    traceLog.push(`Calibration: MAGI Limit ${math.toCurrency(magiLimit)}. Unavoidable Income: ${math.toCurrency(mandatoryMagi)}. Net Room: ${math.toCurrency(netMagiRoom)}.`);
-
-                    // 2. Asset Scan & Density Scoring
-                    // Density = Taxable Income generated per $1 of liquidity drawn.
+                    const magiLimit = fpl100 * 1.38; // Platinum Ceiling
+                    const mandatoryMagi = floorTaxable; 
+                    
+                    // 1. Asset Classification
+                    // Density = MAGI generated per $1 of liquidity drawn.
                     let assets = [
                         { key: '401k', type: 'Ordinary', val: bal['401k'], basis: 0, density: 1.0, label: '401k/IRA' },
                         { key: 'metals', type: 'Collectibles', val: bal['metals'], basis: bal['metalsBasis'], density: 0, label: 'Metals' },
                         { key: 'crypto', type: 'LTCG', val: bal['crypto'], basis: bal['cryptoBasis'], density: 0, label: 'Crypto' },
-                        { key: 'taxable', type: 'LTCG', val: bal['taxable'], basis: bal['taxableBasis'], density: 0, label: 'Brokerage' },
-                        { key: 'cash', type: 'Zero', val: bal['cash'], basis: bal['cash'], density: 0.0, label: 'Cash' },
-                        { key: 'roth-basis', type: 'Zero', val: bal['roth-basis'], basis: bal['roth-basis'], density: 0.0, label: 'Roth Basis' },
-                        { key: 'heloc', type: 'Debt', val: (helocLimit - bal['heloc']), basis: 0, density: 0.0, label: 'HELOC' }
+                        { key: 'taxable', type: 'LTCG', val: bal['taxable'], basis: bal['taxableBasis'], density: 0, label: 'Brokerage' }
                     ];
-
-                    // Calculate dynamic densities based on current Basis/Value
+                    
+                    // Calculate dynamic densities (MAGI impact)
                     assets.forEach(a => {
                         if (a.val > 0) {
-                            if (a.key === 'metals') { // Specific spec: GainRatio / 0.72
-                                const gainRatio = 1 - (a.basis / a.val);
-                                a.density = Math.max(0, gainRatio / 0.72); // Weighted for 28% tax vs 20%
-                            } else if (a.type === 'LTCG') {
-                                const gainRatio = 1 - (a.basis / a.val);
-                                a.density = Math.max(0, gainRatio);
-                            }
+                            const gainRatio = 1 - (a.basis / a.val);
+                            a.density = Math.max(0, gainRatio);
                         }
                     });
+                    
+                    // Priority for filling MAGI: High Density First (401k)
+                    let highDensityAssets = assets.filter(a => a.val > 0).sort((a,b) => b.density - a.density);
 
-                    // 3. Iterative Optimization Loop
-                    let bestDraws = {};
-                    let currentOrdDraw = 0, currentLtcgDraw = 0, currentCollDraw = 0;
-                    let currentMagi = mandatoryMagi;
+                    // Zero Density Buffer Assets (Order: Cash -> Roth -> HELOC)
+                    let zeroDensityAssets = [
+                        { key: 'cash', val: bal['cash'], label: 'Cash' },
+                        { key: 'roth-basis', val: bal['roth-basis'], label: 'Roth Basis' },
+                        { key: 'heloc', val: (helocLimit - bal['heloc']), label: 'HELOC' }
+                    ];
+                    let bufferTotal = zeroDensityAssets.reduce((s, a) => s + a.val, 0);
+
+                    // Solver State Trackers
+                    let committedDraws = {};
+                    let currentOrd = floorTaxable; 
+                    let currentLtcg = 0;
+                    let currentColl = 0;
                     let cashGenerated = 0;
 
-                    // PASS 1: MAGI FILL (High Density)
-                    // Aim: "Launder" taxable money while it's cheap/free up to the MAGI limit.
-                    let magiFillAssets = assets.filter(a => a.density > 0).sort((a,b) => b.density - a.density);
-                    
-                    for (let asset of magiFillAssets) {
-                        let room = magiLimit - currentMagi;
-                        if (room <= 1) break; // Filled
-                        if (asset.val <= 0) continue;
+                    // Helper to calc tax/snap for a hypothetical state
+                    const calcImpact = (o, l, c) => {
+                        const t = engine.calculateTax(o, l, c, filingStatus, assumptions.state, infFac);
+                        const s = engine.calculateSnapBenefit(o/12, 0, 0, totalHhSize, (benefits.shelterCosts||700)*infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
+                        return { taxes: t, snap: s };
+                    };
 
-                        // Density = Taxable / Draw. So Draw = Room / Density.
-                        let drawNeeded = room / asset.density;
-                        let draw = Math.min(drawNeeded, asset.val);
-                        
-                        bestDraws[asset.key] = (bestDraws[asset.key] || 0) + draw;
-                        cashGenerated += draw;
-                        
-                        // Update Taxable Trackers
-                        if (asset.key === '401k') {
-                            currentOrdDraw += draw;
-                            currentMagi += draw;
-                        } else if (asset.key === 'metals') {
-                            let taxablePart = draw * (1 - (asset.basis / asset.val));
-                            currentCollDraw += taxablePart;
-                            currentMagi += taxablePart;
-                        } else { // LTCG
-                            let taxablePart = draw * (1 - (asset.basis / asset.val));
-                            currentLtcgDraw += taxablePart;
-                            currentMagi += taxablePart;
+                    // Function to execute "Fill MAGI" (Step A)
+                    const fillMagi = () => {
+                        for (let asset of highDensityAssets) {
+                            let currentMagi = currentOrd + currentLtcg + currentColl;
+                            let room = magiLimit - currentMagi;
+                            if (room <= 1) break;
+                            if (asset.val <= 0 || asset.density <= 0) continue; 
+
+                            let drawAmount = room / asset.density; 
+                            drawAmount = Math.min(drawAmount, asset.val);
+                            
+                            committedDraws[asset.key] = (committedDraws[asset.key] || 0) + drawAmount;
+                            cashGenerated += drawAmount;
+                            
+                            // Update Running Totals
+                            if (asset.key === '401k') currentOrd += drawAmount;
+                            else {
+                                let gain = drawAmount * asset.density;
+                                if (asset.key === 'metals') currentColl += gain;
+                                else currentLtcg += gain;
+                            }
                         }
-                    }
-                    
-                    // PASS 2: BUDGET FILL (Gap Closure with Zero-ID Assets)
-                    // Estimate Taxes & SNAP based on Pass 1 Income
-                    taxes = engine.calculateTax(floorTaxable + currentOrdDraw, currentLtcgDraw, currentCollDraw, filingStatus, assumptions.state, infFac);
-                    snap = engine.calculateSnapBenefit((floorTaxable + currentOrdDraw)/12, 0, 0, totalHhSize, (benefits.shelterCosts||700)*infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
-                    
-                    let currentTotalCash = floorGross + cashGenerated + snap - taxes;
-                    let gap = targetBudget - currentTotalCash;
-                    
-                    if (gap > 0) {
-                        traceLog.push(`Pass 1 (MAGI Fill) complete. Gap: ${math.toCurrency(gap)}. Engaging Zero-ID assets.`);
-                        // Explicit order: Cash -> Roth Basis -> HELOC
-                        let zeroAssets = [
-                            assets.find(a => a.key === 'cash'),
-                            assets.find(a => a.key === 'roth-basis'),
-                            assets.find(a => a.key === 'heloc')
-                        ].filter(a => a); 
-                        
-                        for (let asset of zeroAssets) {
-                            if (gap <= 0) break;
+                    };
+
+                    // Function to execute "Fill Budget" from Buffer (Step B)
+                    const fillBudgetFromBuffer = (gap) => {
+                        for (let asset of zeroDensityAssets) {
+                            if (gap <= 1) break;
                             if (asset.val <= 0) continue;
                             
                             let draw = Math.min(gap, asset.val);
-                            bestDraws[asset.key] = (bestDraws[asset.key] || 0) + draw;
+                            committedDraws[asset.key] = (committedDraws[asset.key] || 0) + draw;
+                            cashGenerated += draw; 
                             gap -= draw;
                         }
-                    }
+                        return gap; // Remaining gap
+                    };
 
-                    // Apply Draws to Real Balances
-                    preTaxDraw = 0;
-                    Object.entries(bestDraws).forEach(([key, amount]) => {
-                        if (amount <= 0) return;
-                        preTaxDraw += amount;
-                        if (key === 'heloc') {
-                            bal['heloc'] += amount;
-                        } else {
-                            if (bal[key+'Basis']) {
-                                const ratio = amount / bal[key];
-                                bal[key+'Basis'] -= (bal[key+'Basis'] * ratio);
+                    // --- LOGIC BRANCHING ---
+                    if (bufferTotal > 0) {
+                        // === STRATEGY A: LAUNDER WITH BUFFER ===
+                        fillMagi(); // Fill MAGI bucket
+                        
+                        let impact = calcImpact(currentOrd, currentLtcg, currentColl);
+                        let netC = floorGross + cashGenerated + impact.snap - impact.taxes;
+                        let gap = targetBudget - netC;
+                        
+                        if (gap > 0) {
+                            let remainingGap = fillBudgetFromBuffer(gap);
+                            if (remainingGap > 1) {
+                                traceLog.push(`Platinum (Buffer): Buffer exhausted with ${math.toCurrency(remainingGap)} deficit remaining.`);
+                            } else {
+                                traceLog.push(`Platinum (Buffer): Filled MAGI, then used Zero-Income assets to bridge budget.`);
                             }
-                            bal[key] -= amount;
+                        } else {
+                            // Surplus logic handled by global reinvestment below, but we log it
+                            traceLog.push(`Platinum (Buffer): MAGI fill generated surplus of ${math.toCurrency(-gap)}. Reinvesting.`);
                         }
-                    });
-                    
-                    // Final Recalculations for Display
-                    // Recalculate exact taxable components based on final committed draws
-                    let curOrdDraw = bestDraws['401k'] || 0;
-                    let curCollectiblesDraw = 0; 
-                    let curLtcgDraw = 0;
-                    
-                    if (bestDraws['metals'] > 0) {
-                        let bR = startOfYearBal['metalsBasis'] / startOfYearBal['metals'];
-                        curCollectiblesDraw += bestDraws['metals'] * (1 - bR);
+                        
+                        // Finalize tax/snap for this branch
+                        taxes = impact.taxes;
+                        snap = impact.snap;
+                        
+                    } else {
+                        // === STRATEGY B: SMART CLIFF (NO BUFFER) ===
+                        fillMagi(); // Step A: Cap at Platinum
+                        
+                        let impact = calcImpact(currentOrd, currentLtcg, currentColl);
+                        let netC = floorGross + cashGenerated + impact.snap - impact.taxes;
+                        
+                        if (netC >= targetBudget * 0.98) {
+                            // Stay Platinum
+                            traceLog.push(`Platinum (No Buffer): Shortfall accepted (${math.toCurrency(targetBudget - netC)}) to preserve aid status.`);
+                            taxes = impact.taxes;
+                            snap = impact.snap;
+                        } else {
+                            // Break Glass -> Switch to Iron Fist
+                            traceLog.push(`Platinum (No Buffer): Deficit too large. Breaking glass (switching to Silver/Iron Fist).`);
+                            
+                            // Reset state for Iron Fist run
+                            committedDraws = {};
+                            currentOrd = floorTaxable; currentLtcg = 0; currentColl = 0; cashGenerated = 0;
+                            
+                            // Iron Fist Loop (Priority Order)
+                            let currentTaxes = engine.calculateTax(floorTaxable, 0, 0, filingStatus, assumptions.state, infFac);
+                            let currentSnap = engine.calculateSnapBenefit(floorTaxable/12, 0, 0, totalHhSize, (benefits.shelterCosts||700)*infFac, true, false, 0, 0, 0, assumptions.state, infFac, true)*12;
+                            let currentNet = floorGross + currentSnap - currentTaxes;
+                            
+                            // Re-merge all assets for Iron Fist priority scan
+                            let allAssets = [...assets, ...zeroDensityAssets];
+                            
+                            for (const pk of burndown.priorityOrder) {
+                                let deficit = targetBudget - currentNet;
+                                if (deficit <= 1) break;
+                                
+                                let asset = allAssets.find(a => a.key === pk);
+                                if (!asset && pk === 'heloc') asset = { val: helocLimit - bal['heloc'], key: 'heloc' }; 
+                                if (!asset || asset.val <= 0) continue;
+                                
+                                // Binary Search for this asset
+                                let low = 0, high = asset.val, bestDraw = 0;
+                                let density = asset.density || 0;
+                                
+                                // Optimization: If density is 0, net gain is strictly Draw amount
+                                if (density === 0 && pk !== '401k') {
+                                     bestDraw = Math.min(deficit, asset.val);
+                                } else {
+                                    for (let j=0; j<10; j++) {
+                                        let testDraw = (low+high)/2;
+                                        let tOrd = currentOrd + (pk === '401k' ? testDraw : 0);
+                                        let gain = testDraw * density;
+                                        let tColl = currentColl + (pk === 'metals' ? gain : 0);
+                                        let tLtcg = currentLtcg + (['taxable','crypto'].includes(pk) ? gain : 0);
+                                        
+                                        let tImpact = calcImpact(tOrd, tLtcg, tColl);
+                                        let netGain = testDraw - (tImpact.taxes - currentTaxes) + (tImpact.snap - currentSnap);
+                                        
+                                        if (netGain < deficit) { bestDraw = testDraw; low = testDraw; }
+                                        else { high = testDraw; }
+                                    }
+                                    bestDraw = high;
+                                }
+                                
+                                committedDraws[pk] = (committedDraws[pk] || 0) + bestDraw;
+                                
+                                // Update state for next asset
+                                if (pk === '401k') currentOrd += bestDraw;
+                                else if (['taxable','crypto','metals'].includes(pk)) {
+                                    let ratio = 1 - (bal[pk+'Basis']/bal[pk]); 
+                                    if (pk === 'metals') currentColl += bestDraw * ratio;
+                                    else currentLtcg += bestDraw * ratio;
+                                }
+                                
+                                let imp = calcImpact(currentOrd, currentLtcg, currentColl);
+                                currentTaxes = imp.taxes;
+                                currentSnap = imp.snap;
+                                currentNet = floorGross + (Object.values(committedDraws).reduce((a,b)=>a+b,0)) + currentSnap - currentTaxes;
+                            }
+                            taxes = currentTaxes;
+                            snap = currentSnap;
+                        }
                     }
-                    ['taxable', 'crypto'].forEach(k => {
-                        if (bestDraws[k] > 0) {
-                            let bR = startOfYearBal[k+'Basis'] / startOfYearBal[k];
-                            curLtcgDraw += bestDraws[k] * (1 - bR);
+                    
+                    // Commit Draws
+                    preTaxDraw = 0;
+                    drawMap = committedDraws;
+                    Object.entries(committedDraws).forEach(([k, amt]) => {
+                        if (amt <= 0) return;
+                        preTaxDraw += amt;
+                        if (k === 'heloc') bal['heloc'] += amt;
+                        else {
+                            if (bal[k+'Basis']) bal[k+'Basis'] -= (bal[k+'Basis'] * (amt / bal[k]));
+                            bal[k] -= amt;
                         }
                     });
-
-                    // Update Status
-                    const fMAGI = floorTaxable + curOrdDraw + curLtcgDraw + curCollectiblesDraw;
+                    
+                    // Status Update
+                    const fMAGI = currentOrd + currentLtcg + currentColl;
                     status = (age >= 65 ? 'Medicare' : (fMAGI/fpl100 <= 1.38 ? 'Platinum' : 'Silver'));
-                    
-                    // Log the Optimization Result
-                    let pass1Names = magiFillAssets.filter(a => bestDraws[a.key] > 0).map(a => a.label);
-                    if (pass1Names.length) traceLog.push(`Optimizer Pass 1 (MAGI Fill): Drew from ${pass1Names.join(', ')} to hit ${math.toCurrency(fMAGI)} MAGI.`);
-                    
-                    let pass2Names = assets.filter(a => a.density === 0 && bestDraws[a.key] > 0).map(a => a.label);
-                    if (pass2Names.length) traceLog.push(`Optimizer Pass 2 (Budget Fill): Bridged deficit using ${pass2Names.join(', ')}.`);
+                    traceLog.push(`Final Cycle MAGI: ${math.toCurrency(fMAGI)} (${status}).`);
 
                 } else {
                     // --- NEW SEQUENTIAL BINARY SEARCH IRON FIST ---
@@ -983,44 +1051,3 @@ export const burndown = {
     },
 
     renderTable: (results) => {
-        const infRate = (window.currentData.assumptions.inflation || 3) / 100;
-        const strategyMode = document.getElementById('persona-selector')?.dataset.value || 'RAW';
-        let columns = [...burndown.priorityOrder];
-        if (strategyMode === 'PLATINUM') {
-            const harvestables = ['taxable', 'crypto', 'metals'];
-            columns = [...columns.filter(k => harvestables.includes(k)), ...columns.filter(k => !harvestables.includes(k))];
-        }
-        const header = `<tr class="sticky top-0 bg-[#1e293b] !text-slate-500 label-std z-20 border-b border-white/5">
-            <th class="p-2 w-10 text-center !bg-[#1e293b]">Age</th>
-            <th class="p-2 text-center !bg-[#1e293b]">Budget</th>
-            <th class="p-2 text-center !bg-[#1e293b]">Status</th>
-            <th class="p-2 text-center !bg-[#1e293b] text-teal-400">Income</th>
-            <th class="p-2 text-center !bg-[#1e293b] text-emerald-500">Aid</th>
-            <th class="p-2 text-center !bg-[#1e293b] text-orange-400">Gap</th>
-            <th class="p-2 text-center !bg-[#1e293b]">Gross Draw</th>
-            <th class="p-2 text-center !bg-[#1e293b]">Tax</th>
-            ${columns.map(k => `<th class="p-2 text-center !bg-[#1e293b] text-[7px]" style="color:${burndown.assetMeta[k].color}">${burndown.assetMeta[k].short}</th>`).join('')}
-            <th class="p-2 text-center !bg-[#1e293b] text-teal-400">Net Worth</th>
-        </tr>`;
-        const rows = results.map((r, i) => {
-            const inf = isRealDollars ? Math.pow(1 + infRate, i) : 1;
-            const formatVal = (v) => math.toSmartCompactCurrency(v / inf);
-            let badgeClass = r.status === 'INSOLVENT' ? 'bg-red-600 text-white' : (r.status === 'Platinum' ? 'bg-emerald-500 text-white' : (r.status === 'Active' ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-400'));
-            const assetGap = Math.max(0, r.budget - r.floorGross - r.snap);
-            const helocSub = r.helocInt > 50 ? `<div class="text-[7px] font-black text-amber-500 uppercase mt-0.5">HELOC ${formatVal(r.helocInt)}</div>` : '';
-            return `<tr class="border-b border-white/5 hover:bg-white/5 text-[9px]">
-                <td class="p-2 text-center font-bold">${r.age}</td>
-                <td class="p-2 text-center"><div class="${r.isFirstRetYear ? 'text-white' : 'text-slate-400'}">${formatVal(r.budget)}</div>${helocSub}</td>
-                <td class="p-2 text-center"><span class="px-2 py-0.5 rounded-[4px] text-[7px] font-black uppercase ${badgeClass}">${r.status}</span></td>
-                <td class="p-2 text-center text-teal-400 font-bold">${formatVal(r.floorGross)}</td>
-                <td class="p-2 text-center text-emerald-500 font-bold">${formatVal(r.snap)}</td>
-                <td class="p-2 text-center text-orange-400 font-black">${formatVal(assetGap)}</td>
-                <td class="p-2 text-center text-white font-bold">${formatVal(r.preTaxDraw)}</td>
-                <td class="p-2 text-center text-red-400 font-bold">${formatVal(r.taxes)}</td>
-                ${columns.map(k => `<td class="p-1.5 text-center leading-tight"><div class="font-black" style="color: ${r.draws[k] > 0 ? burndown.assetMeta[k].color : '#475569'}">${r.draws[k] > 1 ? formatVal(r.draws[k]) : '$0'}</div><div class="text-slate-600 text-[7px] font-bold">${formatVal(r.balances[k] || 0)}</div></td>`).join('')}
-                <td class="p-2 text-center font-black text-teal-400 bg-teal-400/5">${math.toSmartCompactCurrency(r.netWorth / inf)}</td>
-            </tr>`;
-        }).join('');
-        return `<table class="w-full text-left border-collapse table-auto">${header}<tbody>${rows}</tbody></table>`;
-    }
-};
