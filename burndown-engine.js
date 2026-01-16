@@ -5,14 +5,27 @@ import { solveIronFist } from './burndown-strategy-ironfist.js';
 import { solveHandoutHunter } from './burndown-strategy-handout.js';
 
 export function simulateProjection(data, config) {
-    const { assumptions, investments = [], income = [], budget = {}, benefits = {}, helocs = [], realEstate = [], otherAssets = [], debts = [], stockOptions = [] } = data;
+    const { 
+        assumptions = {}, 
+        investments = [], 
+        income = [], 
+        budget = {}, 
+        benefits = {}, 
+        helocs = [], 
+        realEstate = [], 
+        otherAssets = [], 
+        debts = [], 
+        stockOptions = [] 
+    } = data || {};
+
     const inflationRate = (assumptions.inflation || 3) / 100, filingStatus = assumptions.filingStatus || 'Single', persona = config.strategyMode, rAge = parseFloat(assumptions.retirementAge) || 65, cashFloor = config.cashReserve;
     const ssStartAge = parseFloat(assumptions.ssStartAge) || 67, ssMonthly = parseFloat(assumptions.ssMonthly) || 0, workYears = parseFloat(assumptions.workYearsAtRetirement) || 35;
     
     let firstInsolvencyAge = null;
     const summaries = engine.calculateSummaries(data);
     
-    let hRateRaw = parseFloat(helocs[0]?.rate);
+    // Safely parse HELOC rate
+    let hRateRaw = parseFloat((helocs[0] || {}).rate);
     if (isNaN(hRateRaw)) hRateRaw = 7.0;
     const helocInterestRate = hRateRaw / 100;
 

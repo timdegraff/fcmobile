@@ -1,3 +1,4 @@
+
 /** FIRECalc Stable v4.1.2 - Production Build **/
 import { initializeUI } from './core.js';
 import { initializeData, updateSummaries, loadUserDataIntoUI, refreshAllModules } from './data.js';
@@ -21,23 +22,25 @@ async function bootstrap() {
         // Try to read from local storage - this can throw SecurityError in some sandboxed environments
         localData = localStorage.getItem('firecalc_data');
     } catch (e) {
-        console.warn("Storage access restricted. Proceeding to profile selection.", e);
+        console.warn("Storage access restricted.", e);
     }
     
-    if (localData) {
-        try {
-            const success = await initializeData();
-            if (success) {
-                showApp();
-            } else {
-                showProfileSelection();
-            }
-        } catch (e) {
-            console.error("Boot error", e);
+    // FALLBACK: If storage is empty or failed, use Default Mock Data
+    if (!localData) {
+        console.warn("Storage empty. Seeding default data for Preview Mode.");
+        window.currentData = JSON.parse(JSON.stringify(PROFILE_45_COUPLE));
+    }
+    
+    // Attempt initialization
+    try {
+        const success = await initializeData();
+        if (success) {
+            showApp();
+        } else {
             showProfileSelection();
         }
-    } else {
-        // First time user or reset or restricted storage: show profile selection
+    } catch (e) {
+        console.error("Boot error", e);
         showProfileSelection();
     }
 
@@ -47,6 +50,23 @@ async function bootstrap() {
         setupAppHeader(null, "Local User", "Reset App", true);
         updateSummaries();
     }
+
+    // Safety net: Remove loader after 2 seconds even if init fails slightly
+    setTimeout(() => {
+        if (loginScreen && !loginScreen.classList.contains('hidden')) {
+            const spinner = loginScreen.querySelector('.fa-spin');
+            if (spinner) {
+                // If we are stuck on spinner, force app show if data exists, otherwise show profile selection
+                if (window.currentData) {
+                    showApp();
+                } else {
+                    const modal = document.getElementById('profile-modal');
+                    if (modal) modal.classList.remove('hidden');
+                    loginScreen.classList.add('hidden');
+                }
+            }
+        }
+    }, 2000);
 }
 
 function showProfileSelection() {
