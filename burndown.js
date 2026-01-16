@@ -74,7 +74,7 @@ export const burndown = {
                         <div class="absolute right-0 top-0 p-3"><i class="fas fa-road text-4xl text-blue-400 opacity-20"></i></div>
                         <div>
                             <label class="text-[9px] font-bold text-blue-400 uppercase tracking-widest mb-1 flex items-center gap-1"><i class="fas fa-flag-checkered"></i> Retirement Runway</label>
-                            <div id="card-runway-val" class="text-3xl font-black text-red-400 mono-numbers tracking-tighter">--</div>
+                            <div id="card-runway-val" class="text-3xl font-black text-blue-400 mono-numbers tracking-tighter">--</div>
                         </div>
                         <div id="card-runway-sub" class="text-[9px] font-bold text-blue-400/60 uppercase tracking-tighter leading-none">YEARS OF SOLVENCY REMAINING FROM TODAY</div>
                     </div>
@@ -363,7 +363,16 @@ export const burndown = {
         
         if (document.getElementById('card-runway-val')) {
             const runwayVal = firstInsolvencyAge ? (firstInsolvencyAge - currentAge) : null;
-            document.getElementById('card-runway-val').textContent = runwayVal !== null ? `${runwayVal} Years` : "Forever";
+            const el = document.getElementById('card-runway-val');
+            el.textContent = runwayVal !== null ? `${runwayVal} Years` : "Forever";
+            
+            if (runwayVal !== null) {
+                el.classList.remove('text-blue-400');
+                el.classList.add('text-red-400');
+            } else {
+                el.classList.remove('text-red-400');
+                el.classList.add('text-blue-400');
+            }
         }
         
         if (document.getElementById('card-dwz-val')) document.getElementById('card-dwz-val').textContent = math.toSmartCompactCurrency(burndown.lastCalculatedResults.dwz || 0);
