@@ -1108,7 +1108,12 @@ export const burndown = {
                 <td class="p-2 text-center text-orange-400 font-black">${formatVal(assetGap)}</td>
                 <td class="p-2 text-center text-white font-bold">${formatVal(r.preTaxDraw)}</td>
                 <td class="p-2 text-center text-red-400 font-bold">${formatVal(r.taxes)}</td>
-                ${columns.map(k => `<td class="p-1.5 text-center leading-tight"><div class="font-black" style="color: ${r.draws[k] > 0 ? burndown.assetMeta[k].color : '#475569'}">${r.draws[k] > 1 ? formatVal(r.draws[k]) : '$0'}</div><div class="text-slate-600 text-[7px] font-bold">${formatVal(r.balances[k] || 0)}</div></td>`).join('')}
+                ${columns.map(k => {
+                    const draw = r.draws[k];
+                    const threshold = (k === 'taxable' ? 50 : 1);
+                    const shouldShow = draw > threshold;
+                    return `<td class="p-1.5 text-center leading-tight"><div class="font-black" style="color: ${shouldShow ? burndown.assetMeta[k].color : '#475569'}">${shouldShow ? formatVal(draw) : '$0'}</div><div class="text-slate-600 text-[7px] font-bold">${formatVal(r.balances[k] || 0)}</div></td>`;
+                }).join('')}
                 <td class="p-2 text-center font-black text-teal-400 bg-teal-400/5">${math.toSmartCompactCurrency(r.netWorth / inf)}</td>
             </tr>`;
         }).join('');
