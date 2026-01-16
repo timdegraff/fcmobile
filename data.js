@@ -1,3 +1,4 @@
+
 /** FIRECalc Stable v4.1.2 - Production Build **/
 import { engine, math } from './utils.js';
 import { benefits } from './benefits.js';
@@ -9,34 +10,53 @@ window.currentData = null;
 window.saveTimeout = null;
 
 export async function initializeData() {
-    // If we already have data in memory (from a fresh profile selection), skip local check
-    if (window.currentData) {
-        loadUserDataIntoUI();
-        refreshAllModules();
-        return true;
-    }
-
     try {
-        const local = localStorage.getItem('firecalc_data');
-        if (local) {
-            window.currentData = JSON.parse(local);
+        // 1. Memory Check
+        if (window.currentData) {
             loadUserDataIntoUI();
             refreshAllModules();
             return true;
         }
-    } catch(e) {
-        console.warn("Local storage read failed:", e);
+
+        // 2. Storage Check
+        let local = null;
+        try {
+            local = localStorage.getItem('firecalc_data');
+        } catch (e) {
+            console.warn("Local storage access blocked or failed.");
+        }
+
+        if (local) {
+            window.currentData = JSON.parse(local);
+            console.log("Data loaded from storage.");
+        } else {
+            // 3. FORCE DEFAULT
+            console.warn("No data found. Seeding default profile.");
+            window.currentData = JSON.parse(JSON.stringify(PROFILE_45_COUPLE));
+        }
+
+        loadUserDataIntoUI();
+        refreshAllModules();
+        return true;
+    } catch (err) {
+        console.error("InitializeData fatal error:", err);
+        // Fallback to absolute bare minimum to prevent hang
+        window.currentData = window.currentData || JSON.parse(JSON.stringify(PROFILE_45_COUPLE));
+        return true; 
     }
-    return false;
 }
 
 export function refreshAllModules() {
-    if(window.updateSidebarChart) window.updateSidebarChart(window.currentData);
-    if(window.createAssumptionControls) window.createAssumptionControls(window.currentData);
-    benefits.load(window.currentData.benefits);
-    burndown.load(window.currentData.burndown);
-    projection.load(window.currentData.projectionSettings);
-    updateSummaries();
+    try {
+        if(window.updateSidebarChart) window.updateSidebarChart(window.currentData);
+        if(window.createAssumptionControls) window.createAssumptionControls(window.currentData);
+        if(benefits.load) benefits.load(window.currentData.benefits);
+        if(burndown.load) burndown.load(window.currentData.burndown);
+        if(projection.load) projection.load(window.currentData.projectionSettings);
+        updateSummaries();
+    } catch (e) {
+        console.warn("Module refresh encountered minor error:", e);
+    }
 }
 
 export function loadUserDataIntoUI() {
@@ -137,9 +157,9 @@ function scrapeData() {
         newData.assumptions = aObj;
     }
 
-    if (document.getElementById('benefits-module')) newData.benefits = benefits.scrape();
-    if (document.getElementById('burndown-view-container')) newData.burndown = burndown.scrape();
-    if (document.getElementById('projection-chart')) newData.projectionSettings = projection.scrape();
+    if (benefits.scrape) newData.benefits = benefits.scrape();
+    if (burndown.scrape) newData.burndown = burndown.scrape();
+    if (projection.scrape) newData.projectionSettings = projection.scrape();
 
     return newData;
 }

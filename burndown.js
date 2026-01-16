@@ -13,13 +13,17 @@ let firstInsolvencyAge = null;
 let fullSimulationResults = [];
 let priorityOrder = [...defaultPriorityOrder];
 
-// Debug Helper
+// Debug Helper - Robust
 const log = (msg) => {
-    console.log(msg);
+    console.log(`[Burndown] ${msg}`);
     const el = document.getElementById('debug-console');
     if (el) {
-        el.innerHTML += `<div>${new Date().toISOString().split('T')[1]} - ${msg}</div>`;
-        el.scrollTop = el.scrollHeight;
+        try {
+            const div = document.createElement('div');
+            div.textContent = `${new Date().toISOString().split('T')[1]} - ${msg}`;
+            el.appendChild(div);
+            el.scrollTop = el.scrollHeight;
+        } catch (e) {}
     }
 };
 
@@ -32,42 +36,13 @@ export const burndown = {
 
     init: () => {
         try {
-            // 1. Create Debug Overlay
-            if (!document.getElementById('debug-console')) {
-                const div = document.createElement('div');
-                div.id = 'debug-console';
-                div.style.cssText = "position:fixed; top:0; left:0; width:100%; height:300px; background:rgba(0,0,0,0.9); color:#0f0; font-family:monospace; font-size:12px; z-index:99999; overflow:auto; padding:10px; pointer-events:none;";
-                div.innerHTML = `
-                    <div style="pointer-events:auto; float:right; margin-bottom:10px;">
-                        <button id="debug-panic-btn" style="background:red; color:white; font-weight:bold; padding:5px 10px; border:1px solid white; cursor:pointer;">FORCE LOAD DEFAULTS</button>
-                    </div>
-                    <div>=== DEBUG LOG STARTED ===</div>
-                `;
-                document.body.appendChild(div);
-
-                const panicBtn = document.getElementById('debug-panic-btn');
-                if (panicBtn) {
-                    panicBtn.onclick = () => {
-                        log("PANIC BUTTON CLICKED");
-                        window.currentData = JSON.parse(JSON.stringify(PROFILE_45_COUPLE));
-                        log("Defaults Injected. Forcing App Show...");
-                        const login = document.getElementById('login-screen');
-                        const app = document.getElementById('app-container');
-                        if (login) login.classList.add('hidden');
-                        if (app) app.classList.remove('hidden');
-                        burndown.run();
-                    };
-                }
-            }
-
             log("burndown.init() called");
 
             const viewContainer = document.getElementById('burndown-view-container');
             if (!viewContainer) {
-                log("Warning: #burndown-view-container not found (might be on different tab?)");
+                log("Warning: #burndown-view-container not found in current DOM state.");
                 return;
             }
-            log("#burndown-view-container found in DOM");
 
             viewContainer.innerHTML = `
                 <div class="flex flex-col gap-2.5">
@@ -192,17 +167,12 @@ export const burndown = {
                     </div>
                 </div>
             `;
-            log("View HTML injected");
             
             burndown.attachListeners();
-            log("Listeners attached");
-
-            log("Attempting initial run...");
-            burndown.run();
+            if (window.currentData) burndown.run();
 
         } catch (e) {
             log(`CRITICAL ERROR IN INIT: ${e.message}`);
-            console.error(e);
         }
     },
 
@@ -216,7 +186,7 @@ export const burndown = {
                     const inp = document.getElementById('input-manual-budget');
                     inp.disabled = el.checked;
                     inp.classList.toggle('opacity-40', el.checked);
-                    if (el.checked) {
+                    if (el.checked && window.currentData) {
                          const summaries = engine.calculateSummaries(window.currentData);
                          inp.value = math.toCurrency(summaries.totalAnnualBudget);
                     }
@@ -261,79 +231,55 @@ export const burndown = {
             realBtn.onclick = () => { isRealDollars = !isRealDollars; updateToggleStyle(realBtn, isRealDollars); burndown.run(); };
         }
 
-        const traceYearInput = document.getElementById('input-trace-year');
-        const traceAgeInput = document.getElementById('input-trace-age');
-        if (traceYearInput && traceAgeInput) {
-            const validateTraceInputs = () => {
-                if (!fullSimulationResults.length) return;
-                const first = fullSimulationResults[0], last = fullSimulationResults[fullSimulationResults.length - 1];
-                let year = parseInt(traceYearInput.value);
-                
-                if (isNaN(year) || year < first.year) year = first.year;
-                if (year > last.year) year = last.year;
-                
-                traceYearInput.value = year;
-                const match = fullSimulationResults.find(r => r.year === year);
-                if (match) traceAgeInput.value = match.age;
-                renderTrace(document.getElementById('logic-trace-container'), fullSimulationResults, year);
-            };
-
-            traceYearInput.oninput = () => {
-                const val = parseInt(traceYearInput.value);
+        const ty = document.getElementById('input-trace-year');
+        const ta = document.getElementById('input-trace-age');
+        if (ty && ta) {
+            ty.oninput = () => {
+                const val = parseInt(ty.value);
                 if (fullSimulationResults.length && !isNaN(val)) {
                     const match = fullSimulationResults.find(r => r.year === val);
                     if (match) {
-                        traceAgeInput.value = match.age;
+                        ta.value = match.age;
                         renderTrace(document.getElementById('logic-trace-container'), fullSimulationResults, val);
                     }
                 }
             };
-            traceYearInput.onchange = validateTraceInputs;
-            traceYearInput.onblur = validateTraceInputs;
-
-            traceAgeInput.oninput = () => {
-                const val = parseInt(traceAgeInput.value);
+            ta.oninput = () => {
+                const val = parseInt(ta.value);
                 if (fullSimulationResults.length && !isNaN(val)) {
                     const match = fullSimulationResults.find(r => r.age === val);
                     if (match) {
-                        traceYearInput.value = match.year;
+                        ty.value = match.year;
                         renderTrace(document.getElementById('logic-trace-container'), fullSimulationResults, match.year);
                     }
                 }
             };
-            traceAgeInput.onchange = validateTraceInputs; 
-            traceAgeInput.onblur = validateTraceInputs;
         }
     },
 
     load: (data) => {
-        if (data?.priority) priorityOrder = [...new Set(data.priority)];
-        isRealDollars = !!data?.isRealDollars;
-        if (data) {
-            const mode = data.strategyMode || 'RAW';
-            const personaSelector = document.getElementById('persona-selector');
-            if (personaSelector) { const btn = personaSelector.querySelector(`[data-mode="${mode}"]`); if (btn) btn.click(); }
-            
-            const sync = (id, val) => { const el = document.getElementById(id); if (el) { el.value = val; el.dispatchEvent(new Event('input')); } };
-            sync('input-cash-reserve', data.cashReserve ?? 25000);
-            sync('input-snap-preserve', data.snapPreserve ?? 0);
-            
-            const syncCheck = document.getElementById('toggle-budget-sync');
-            if (syncCheck) syncCheck.checked = data.useSync ?? true;
-            
-            const manualBud = document.getElementById('input-manual-budget');
-            if (manualBud) {
-                const summaries = engine.calculateSummaries(window.currentData);
-                manualBud.value = math.toCurrency(data.useSync ? summaries.totalAnnualBudget : (data.manualBudget || 100000));
-                manualBud.disabled = data.useSync;
-            }
-            
-            const priorityWrapper = document.getElementById('priority-list-wrapper');
-            if (priorityWrapper) {
-                priorityWrapper.classList.toggle('opacity-40', mode === 'PLATINUM');
-                priorityWrapper.classList.toggle('pointer-events-none', mode === 'PLATINUM');
-            }
+        if (!data) return;
+        if (data.priority) priorityOrder = [...new Set(data.priority)];
+        isRealDollars = !!data.isRealDollars;
+        
+        const mode = data.strategyMode || 'RAW';
+        const personaSelector = document.getElementById('persona-selector');
+        if (personaSelector) { const btn = personaSelector.querySelector(`[data-mode="${mode}"]`); if (btn) btn.click(); }
+        
+        const sync = (id, val) => { const el = document.getElementById(id); if (el) { el.value = val; el.dispatchEvent(new Event('input')); } };
+        sync('input-cash-reserve', data.cashReserve ?? 25000);
+        sync('input-snap-preserve', data.snapPreserve ?? 0);
+        
+        const syncCheck = document.getElementById('toggle-budget-sync');
+        if (syncCheck) syncCheck.checked = data.useSync ?? true;
+        
+        const manualBud = document.getElementById('input-manual-budget');
+        if (manualBud && window.currentData) {
+            const summaries = engine.calculateSummaries(window.currentData);
+            manualBud.value = math.toCurrency(data.useSync ? summaries.totalAnnualBudget : (data.manualBudget || 100000));
+            manualBud.disabled = data.useSync;
         }
+        
         renderPriorityList(document.getElementById('draw-priority-list'), priorityOrder, (newOrder) => {
             priorityOrder = newOrder;
             burndown.run();
@@ -354,25 +300,10 @@ export const burndown = {
 
     run: () => {
         try {
-            log("burndown.run() called");
-            
-            log("Checking window.currentData type: " + typeof window.currentData);
             const data = window.currentData; 
-            if (!data) {
-                log("Data is missing. Aborting run.");
-                return;
-            }
-            
-            log("Has investments? " + (data.investments ? "YES" : "NO"));
-            log("Attempting render...");
-
-            const retAgeInput = document.querySelector('#tab-burndown input[data-id="retirementAge"]');
-            if (retAgeInput && data.assumptions?.retirementAge) {
-                retAgeInput.value = data.assumptions.retirementAge;
-            }
+            if (!data) return;
 
             const config = burndown.scrape();
-            
             const ben = data.benefits || {};
             const filingStatus = data.assumptions?.filingStatus || 'Single';
             const adults = filingStatus === 'Married Filing Jointly' ? 2 : 1;
@@ -383,70 +314,42 @@ export const burndown = {
             const maxSnapPossible = engine.calculateSnapBenefit(0, 0, 0, totalSize, ben.shelterCosts || 700, ben.hasSUA ?? true, ben.isDisabled ?? false, ben.childSupportPaid || 0, ben.depCare || 0, ben.medicalExps || 0, data.assumptions?.state || 'Michigan', 1, true);
             
             const snapIndicator = document.getElementById('est-snap-indicator');
-            if (snapIndicator) {
-                snapIndicator.textContent = math.toCurrency(maxSnapPossible);
-            }
+            if (snapIndicator) snapIndicator.textContent = math.toCurrency(maxSnapPossible);
 
-            log("Calling simulateProjection...");
             fullSimulationResults = simulateProjection(data, config);
-            log(`Simulation returned ${fullSimulationResults.length} records.`);
-
             firstInsolvencyAge = fullSimulationResults.firstInsolvencyAge;
             
-            const ty = document.getElementById('input-trace-year');
-            const ta = document.getElementById('input-trace-age');
-            if (ty && ta && fullSimulationResults.length > 0) {
-                const first = fullSimulationResults[0];
-                const currentYearVal = parseInt(ty.value);
-                const last = fullSimulationResults[fullSimulationResults.length - 1];
-                if (currentYearVal < first.year || currentYearVal > last.year) {
-                    ty.value = first.year;
-                    ta.value = first.age;
-                }
-            }
-
             const currentAge = parseFloat(data.assumptions.currentAge) || 40;
+            const runwayVal = firstInsolvencyAge ? (firstInsolvencyAge - currentAge) : null;
             
-            if (document.getElementById('card-runway-val')) {
-                const runwayVal = firstInsolvencyAge ? (firstInsolvencyAge - currentAge) : null;
-                const el = document.getElementById('card-runway-val');
-                el.textContent = runwayVal !== null ? `${runwayVal} Years` : "Forever";
-                el.classList.remove('text-red-400');
-                el.classList.add('text-blue-400');
+            const runwayEl = document.getElementById('card-runway-val');
+            if (runwayEl) {
+                runwayEl.textContent = runwayVal !== null ? `${runwayVal} Years` : "Forever";
             }
             
-            if (document.getElementById('card-preservation-val')) {
-                document.getElementById('card-preservation-val').textContent = firstInsolvencyAge ? firstInsolvencyAge : "100+";
-            }
+            const presEl = document.getElementById('card-preservation-val');
+            if (presEl) presEl.textContent = firstInsolvencyAge ? firstInsolvencyAge : "100+";
 
-            if (document.getElementById('burndown-table-container')) {
-                document.getElementById('burndown-table-container').innerHTML = renderTable(fullSimulationResults, data, priorityOrder, isRealDollars, config.strategyMode);
-            }
+            const tableCont = document.getElementById('burndown-table-container');
+            if (tableCont) tableCont.innerHTML = renderTable(fullSimulationResults, data, priorityOrder, isRealDollars, config.strategyMode);
             
+            const ty = document.getElementById('input-trace-year');
             const traceYear = parseInt(ty?.value) || fullSimulationResults[0]?.year;
             renderTrace(document.getElementById('logic-trace-container'), fullSimulationResults, traceYear);
             
-            // Optimize DWZ
             const dwzResult = calculateDieWithZero(data, config, burndown);
-            if (document.getElementById('card-dwz-val')) document.getElementById('card-dwz-val').textContent = math.toSmartCompactCurrency(dwzResult);
-            if (document.getElementById('card-dwz-sub')) document.getElementById('card-dwz-sub').textContent = `MAX SUSTAINABLE SPEND OF $${Math.round(dwzResult/1000)}K/YR STARTING AT RETIREMENT`;
-            
-            log("Attempting to hide #loading-overlay...");
-            // Force removal of spinner if data is present and we completed run
+            const dwzValEl = document.getElementById('card-dwz-val');
+            if (dwzValEl) dwzValEl.textContent = math.toSmartCompactCurrency(dwzResult);
+
+            // Close boot spinner if we're here
             const loginScreen = document.getElementById('login-screen');
             if (loginScreen && !loginScreen.classList.contains('hidden')) {
-                log("Hiding login screen overlay.");
                 loginScreen.classList.add('hidden');
                 document.getElementById('app-container')?.classList.remove('hidden');
             }
-            
-            log("Run complete.");
-            const debugEl = document.getElementById('debug-console');
-            if (debugEl) debugEl.style.display = 'none';
 
         } catch (e) {
-            log(`CRITICAL ERROR IN RUN: ${e.message} | ${e.stack}`);
-            console.error(e);
+            console.warn("Burndown run error:", e);
         }
     }
 };
