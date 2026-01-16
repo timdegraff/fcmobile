@@ -1011,19 +1011,24 @@ export const burndown = {
             if (postTaxInc > targetBudget) { 
                 let surplus = postTaxInc - targetBudget;
                 
-                // Aggressive Paydown: Use 100% of Surplus for HELOC first
-                if (bal['heloc'] > 0) {
-                    const paydown = Math.min(bal['heloc'], surplus);
-                    bal['heloc'] -= paydown;
-                    surplus -= paydown;
-                    traceLog.push(`Aggressive Surplus Paydown: Used ${math.toCurrency(paydown)} to reduce HELOC principal.`);
-                }
+                if (!isRet) {
+                    // Pre-Retirement: User spends surplus (Lifestyle Creep)
+                    traceLog.push(`Surplus Income: ${math.toCurrency(surplus)} assumed spent (Lifestyle Creep) prior to retirement.`);
+                } else {
+                    // Aggressive Paydown: Use 100% of Surplus for HELOC first
+                    if (bal['heloc'] > 0) {
+                        const paydown = Math.min(bal['heloc'], surplus);
+                        bal['heloc'] -= paydown;
+                        surplus -= paydown;
+                        traceLog.push(`Aggressive Surplus Paydown: Used ${math.toCurrency(paydown)} to reduce HELOC principal.`);
+                    }
 
-                // Remaining surplus to Taxable Brokerage
-                if (surplus > 0) {
-                    bal['taxable'] += surplus;
-                    bal['taxableBasis'] += surplus; 
-                    traceLog.push(`Surplus Reinvestment: ${math.toCurrency(surplus)} added to Brokerage.`);
+                    // Remaining surplus to Taxable Brokerage
+                    if (surplus > 0) {
+                        bal['taxable'] += surplus;
+                        bal['taxableBasis'] += surplus; 
+                        traceLog.push(`Surplus Reinvestment: ${math.toCurrency(surplus)} added to Brokerage.`);
+                    }
                 }
             }
 
