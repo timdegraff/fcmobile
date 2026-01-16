@@ -271,7 +271,7 @@ export const burndown = {
         'heloc': { label: 'HELOC', short: 'HELOC', color: assetColors['HELOC'], isTaxable: false },
         '401k': { label: '401k/IRA', short: '401k/IRA', color: assetColors['Pre-Tax (401k/IRA)'], isTaxable: true },
         'roth-earnings': { label: 'Roth Gains', short: 'Roth Gains', color: assetColors['Roth IRA'], isTaxable: false },
-        'crypto': { label: 'Bitcoin', short: 'Bitcoin', color: assetColors['Crypto'], isTaxable: true },
+        'crypto': { label: 'Crypto', short: 'Crypto', color: assetColors['Crypto'], isTaxable: true },
         'metals': { label: 'Metals', short: 'Metals', color: assetColors['Metals'], isTaxable: true },
         'hsa': { label: 'HSA', short: 'HSA', color: assetColors['HSA'], isTaxable: false }
     },
@@ -334,7 +334,7 @@ export const burndown = {
         const filingStatus = data.assumptions?.filingStatus || 'Single';
         const adults = filingStatus === 'Married Filing Jointly' ? 2 : 1;
         const currentYear = new Date().getFullYear();
-        const effectiveKidsCount = (ben.dependents || []).filter(d => (d.birthYear + 19) >= year).length;
+        const effectiveKidsCount = (ben.dependents || []).filter(d => (d.birthYear + 19) >= currentYear).length;
         const totalSize = adults + effectiveKidsCount;
         
         const maxSnapPossible = engine.calculateSnapBenefit(0, 0, 0, totalSize, ben.shelterCosts || 700, ben.hasSUA ?? true, ben.isDisabled ?? false, ben.childSupportPaid || 0, ben.depCare || 0, ben.medicalExps || 0, data.assumptions?.state || 'Michigan', 1, true);
@@ -659,166 +659,156 @@ export const burndown = {
                 traceLog.push(`Household base income sources: ${incomeBreakdown.map(ib => `${ib.name} (${math.toCurrency(ib.amount)})`).join(', ')}.`);
                 
                 if (persona === 'PLATINUM') {
-                    // --- HANDOUT HUNTER ALGORITHM ---
-                    // 1. Calculate Target MAGI for desired SNAP
-                    const targetSnap = (config.snapPreserve || 0); // User wants this monthly amount
-                    
-                    // We need to inverse solve: What MAGI yields this SNAP?
-                    // BUT ALSO respect Medicaid cliffs.
-                    const shelter = (benefits.shelterCosts || 700) * infFac;
-                    const childSupport = (benefits.childSupportPaid || 0) * infFac;
-                    const depCare = (benefits.depCare || 0) * infFac;
-                    const medExps = (benefits.medicalExps || 0) * infFac;
-                    
-                    // Calculate MAGI needed for SNAP target
-                    const rawSnapTargetMagi = engine.calculateTargetMagiForSnap(targetSnap, totalHhSize, shelter, benefits.hasSUA, benefits.isDisabled, childSupport, depCare, medExps, assumptions.state, infFac);
-                    
-                    // Apply Medicaid/ACA Boundaries
-                    let floorMagi = 0, ceilMagi = Infinity;
-                    const isExpanded = stateMeta?.expanded !== false;
-                    
-                    if (isExpanded) {
-                        // Expansion state: Can make 0 and still get Medicaid.
-                        // Ideally stay under 138% FPL to keep Medicaid (free).
-                        ceilMagi = fpl100 * 1.38; 
-                    } else {
-                        // Non-expansion: Must make > 100% FPL to get subsidies (Gap avoidance).
-                        floorMagi = fpl100 * 1.01; // 1% buffer
-                    }
-                    
-                    // Final Target MAGI
-                    // If raw target for SNAP is below floor (Medicaid Gap), we must raise it to floor.
-                    // If raw target for SNAP is above ceiling (Medicaid loss), user must decide if SNAP > Medicaid.
-                    // Assuming user wants MAX benefits, we prioritize health subsidy if in Gap.
-                    let targetMagi = Math.max(floorMagi, rawSnapTargetMagi);
-                    
-                    // Safety Buffer: Target 99% of calculated ceiling to avoid accidental overage
-                    if (targetMagi > ceilMagi && rawSnapTargetMagi < ceilMagi) {
-                        targetMagi = ceilMagi * 0.99;
-                    } else {
-                        targetMagi = targetMagi * 0.99; // Safety buffer against minor interest
-                    }
+                    // --- HANDOUT HUNTER: MULTI-PASS ITERATIVE OPTIMIZER (V4.5 UPGRADE) ---
+                    // Strategy: Fill MAGI "Net Room" with High-Income-Density assets first to utilize low tax brackets.
+                    // Then fill remaining budget gap with Zero-Income-Density assets.
 
-                    traceLog.push(`Targeting MAGI: ${math.toCurrency(targetMagi)} to optimize SNAP/ACA. (Floor: ${math.toCurrency(floorMagi)}, Ceiling: ${math.toCurrency(ceilMagi)})`);
+                    // 1. Calibration: Define MAGI Ceiling & Net Room
+                    const magiLimit = fpl100 * 1.38; // 138% FPL Ceiling for Medicaid/ACA Max
+                    const mandatoryMagi = floorTaxable; // From fixed income sources
+                    let netMagiRoom = Math.max(0, magiLimit - mandatoryMagi);
+                    traceLog.push(`Calibration: MAGI Limit ${math.toCurrency(magiLimit)}. Unavoidable Income: ${math.toCurrency(mandatoryMagi)}. Net Room: ${math.toCurrency(netMagiRoom)}.`);
 
-                    // 2. MAGI FILL PHASE
-                    // Use Taxable + 401k to reach Target MAGI (if Mandatory isn't enough)
-                    bal = { ...startOfYearBal }; drawMap = {}; preTaxDraw = 0;
-                    let curOrdDraw = 0, curLtcgDraw = 0, curCollectiblesDraw = 0;
-                    
-                    let currentMagi = floorTaxable; // Mandatory sources
-                    let magiGap = targetMagi - currentMagi;
-                    
-                    if (magiGap > 0) {
-                        // Draw Priority for MAGI Generation:
-                        // 1. Taxable (Flexible, partial MAGI)
-                        // 2. 401k (100% MAGI, use 72t if needed)
-                        
-                        // A. Try Taxable
-                        if (bal['taxable'] > 0) {
-                            let bR = bal['taxableBasis'] / bal['taxable'];
-                            // Gain portion = (1 - bR). If gain is 0, no MAGI generated.
-                            // To generate $X MAGI, we need Draw * (1 - bR) = X  => Draw = X / (1 - bR)
-                            if ((1 - bR) > 0.05) { // Only if reasonable gains exist
-                                let drawNeeded = magiGap / (1 - bR);
-                                let actualDraw = Math.min(drawNeeded, bal['taxable']);
-                                
-                                bal['taxable'] -= actualDraw;
-                                bal['taxableBasis'] -= (actualDraw * bR);
-                                drawMap['taxable'] = (drawMap['taxable'] || 0) + actualDraw;
-                                curLtcgDraw += (actualDraw * (1 - bR));
-                                magiGap -= (actualDraw * (1 - bR));
-                                
-                                const taxEff = (1 - ((1 - bR) * 0.15)) * 100;
-                                traceLog.push(`Harvesting ${math.toCurrency(actualDraw)} from Brokerage to generate MAGI. (Tax Efficiency: ${Math.round(taxEff)}% due to ${Math.round(bR*100)}% Basis)`);
+                    // 2. Asset Scan & Density Scoring
+                    // Density = Taxable Income generated per $1 of liquidity drawn.
+                    let assets = [
+                        { key: '401k', type: 'Ordinary', val: bal['401k'], basis: 0, density: 1.0, label: '401k/IRA' },
+                        { key: 'metals', type: 'Collectibles', val: bal['metals'], basis: bal['metalsBasis'], density: 0, label: 'Metals' },
+                        { key: 'crypto', type: 'LTCG', val: bal['crypto'], basis: bal['cryptoBasis'], density: 0, label: 'Crypto' },
+                        { key: 'taxable', type: 'LTCG', val: bal['taxable'], basis: bal['taxableBasis'], density: 0, label: 'Brokerage' },
+                        { key: 'cash', type: 'Zero', val: bal['cash'], basis: bal['cash'], density: 0.0, label: 'Cash' },
+                        { key: 'roth-basis', type: 'Zero', val: bal['roth-basis'], basis: bal['roth-basis'], density: 0.0, label: 'Roth Basis' },
+                        { key: 'heloc', type: 'Debt', val: (helocLimit - bal['heloc']), basis: 0, density: 0.0, label: 'HELOC' }
+                    ];
+
+                    // Calculate dynamic densities based on current Basis/Value
+                    assets.forEach(a => {
+                        if (a.val > 0) {
+                            if (a.key === 'metals') { // Specific spec: GainRatio / 0.72
+                                const gainRatio = 1 - (a.basis / a.val);
+                                a.density = Math.max(0, gainRatio / 0.72); // Weighted for 28% tax vs 20%
+                            } else if (a.type === 'LTCG') {
+                                const gainRatio = 1 - (a.basis / a.val);
+                                a.density = Math.max(0, gainRatio);
                             }
                         }
+                    });
+
+                    // 3. Iterative Optimization Loop
+                    let bestDraws = {};
+                    let currentOrdDraw = 0, currentLtcgDraw = 0, currentCollDraw = 0;
+                    let currentMagi = mandatoryMagi;
+                    let cashGenerated = 0;
+
+                    // PASS 1: MAGI FILL (High Density)
+                    // Aim: "Launder" taxable money while it's cheap/free up to the MAGI limit.
+                    let magiFillAssets = assets.filter(a => a.density > 0).sort((a,b) => b.density - a.density);
+                    
+                    for (let asset of magiFillAssets) {
+                        let room = magiLimit - currentMagi;
+                        if (room <= 1) break; // Filled
+                        if (asset.val <= 0) continue;
+
+                        // Density = Taxable / Draw. So Draw = Room / Density.
+                        let drawNeeded = room / asset.density;
+                        let draw = Math.min(drawNeeded, asset.val);
                         
-                        // B. Try 401k (SEPP if young)
-                        if (magiGap > 0 && bal['401k'] > 0) {
-                            let available401k = bal['401k'];
-                            if (age < 59.5) {
-                                const maxSepp = engine.calculateMaxSepp(startOfYearBal['401k'], age);
-                                // For simulation simplicity, we assume we can take up to Max SEPP penalty-free
-                                available401k = Math.min(available401k, maxSepp); 
-                                traceLog.push(`Using 72t SEPP capacity: ${math.toCurrency(available401k)} available.`);
-                            }
-                            
-                            let draw401k = Math.min(magiGap, available401k);
-                            bal['401k'] -= draw401k;
-                            drawMap['401k'] = (drawMap['401k'] || 0) + draw401k;
-                            curOrdDraw += draw401k;
-                            magiGap -= draw401k;
-                            traceLog.push(`Drawing ${math.toCurrency(draw401k)} from 401k to reach target income.`);
+                        bestDraws[asset.key] = (bestDraws[asset.key] || 0) + draw;
+                        cashGenerated += draw;
+                        
+                        // Update Taxable Trackers
+                        if (asset.key === '401k') {
+                            currentOrdDraw += draw;
+                            currentMagi += draw;
+                        } else if (asset.key === 'metals') {
+                            let taxablePart = draw * (1 - (asset.basis / asset.val));
+                            currentCollDraw += taxablePart;
+                            currentMagi += taxablePart;
+                        } else { // LTCG
+                            let taxablePart = draw * (1 - (asset.basis / asset.val));
+                            currentLtcgDraw += taxablePart;
+                            currentMagi += taxablePart;
                         }
                     }
                     
-                    preTaxDraw = curOrdDraw + (drawMap['taxable'] || 0); // Total gross draw so far
+                    // PASS 2: BUDGET FILL (Gap Closure with Zero-ID Assets)
+                    // Estimate Taxes & SNAP based on Pass 1 Income
+                    taxes = engine.calculateTax(floorTaxable + currentOrdDraw, currentLtcgDraw, currentCollDraw, filingStatus, assumptions.state, infFac);
+                    snap = engine.calculateSnapBenefit((floorTaxable + currentOrdDraw)/12, 0, 0, totalHhSize, (benefits.shelterCosts||700)*infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
                     
-                    // 3. BUDGET FILL PHASE (Newton-Raphson for Remaining Need)
-                    // Fill remaining budget gap with Non-MAGI sources: Cash, Roth Basis, HELOC
-                    const nonMagiSources = ['cash', 'roth-basis', 'heloc', 'roth-earnings']; // Priority order
+                    let currentTotalCash = floorGross + cashGenerated + snap - taxes;
+                    let gap = targetBudget - currentTotalCash;
                     
-                    for (let iter = 0; iter < 10; iter++) {
-                        // Recalculate Taxes/SNAP based on current draw state
-                        // Note: During this phase, MAGI doesn't change, but tax *might* if we accidentally triggered something (unlikely with these sources)
-                        taxes = engine.calculateTax(floorTaxable + curOrdDraw, curLtcgDraw, curCollectiblesDraw, filingStatus, assumptions.state, infFac);
-                        snap = engine.calculateSnapBenefit((floorTaxable + curOrdDraw) / 12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
+                    if (gap > 0) {
+                        traceLog.push(`Pass 1 (MAGI Fill) complete. Gap: ${math.toCurrency(gap)}. Engaging Zero-ID assets.`);
+                        // Explicit order: Cash -> Roth Basis -> HELOC
+                        let zeroAssets = [
+                            assets.find(a => a.key === 'cash'),
+                            assets.find(a => a.key === 'roth-basis'),
+                            assets.find(a => a.key === 'heloc')
+                        ].filter(a => a); 
                         
-                        const currentPostTax = (floorGross + preTaxDraw + snap) - taxes;
-                        const budgetGap = targetBudget - currentPostTax;
-                        
-                        if (Math.abs(budgetGap) < 10) break; // Close enough
-                        
-                        // We only want to fill the gap using Non-MAGI sources now
-                        if (budgetGap > 0) {
-                            let gapToFill = budgetGap; 
-                            // No drag calculation needed for these sources (mostly), assumed 1:1 except HELOC interest next year
+                        for (let asset of zeroAssets) {
+                            if (gap <= 0) break;
+                            if (asset.val <= 0) continue;
                             
-                            for (const src of nonMagiSources) {
-                                if (gapToFill <= 0) break;
-                                let av = (src === 'heloc' ? Math.max(0, helocLimit - bal[src]) : (src === 'cash' ? Math.max(0, bal[src] - cashFloor) : bal[src]));
-                                if (av <= 0) continue;
-                                
-                                let pull = Math.min(av, gapToFill);
-                                
-                                if (src === 'heloc') bal[src] += pull;
-                                else bal[src] -= pull;
-                                
-                                drawMap[src] = (drawMap[src] || 0) + pull;
-                                preTaxDraw += pull;
-                                gapToFill -= pull;
-                            }
+                            let draw = Math.min(gap, asset.val);
+                            bestDraws[asset.key] = (bestDraws[asset.key] || 0) + draw;
+                            gap -= draw;
+                        }
+                    }
+
+                    // Apply Draws to Real Balances
+                    preTaxDraw = 0;
+                    Object.entries(bestDraws).forEach(([key, amount]) => {
+                        if (amount <= 0) return;
+                        preTaxDraw += amount;
+                        if (key === 'heloc') {
+                            bal['heloc'] += amount;
                         } else {
-                            // Surplus (drew too much in MAGI phase? or previous loop?)
-                            // We can reduce Non-MAGI draws if we have any
-                            let surplus = -budgetGap;
-                            for (let i = nonMagiSources.length - 1; i >= 0; i--) {
-                                const src = nonMagiSources[i];
-                                const drawn = drawMap[src] || 0;
-                                if (drawn > 0) {
-                                    let reduceBy = Math.min(drawn, surplus);
-                                    if (src === 'heloc') bal[src] -= reduceBy;
-                                    else bal[src] += reduceBy;
-                                    
-                                    drawMap[src] -= reduceBy;
-                                    preTaxDraw -= reduceBy;
-                                    surplus -= reduceBy;
-                                    if (surplus <= 0) break;
-                                }
+                            if (bal[key+'Basis']) {
+                                const ratio = amount / bal[key];
+                                bal[key+'Basis'] -= (bal[key+'Basis'] * ratio);
                             }
+                            bal[key] -= amount;
                         }
-                    }
+                    });
                     
+                    // Final Recalculations for Display
+                    // Recalculate exact taxable components based on final committed draws
+                    let curOrdDraw = bestDraws['401k'] || 0;
+                    let curCollectiblesDraw = 0; 
+                    let curLtcgDraw = 0;
+                    
+                    if (bestDraws['metals'] > 0) {
+                        let bR = startOfYearBal['metalsBasis'] / startOfYearBal['metals'];
+                        curCollectiblesDraw += bestDraws['metals'] * (1 - bR);
+                    }
+                    ['taxable', 'crypto'].forEach(k => {
+                        if (bestDraws[k] > 0) {
+                            let bR = startOfYearBal[k+'Basis'] / startOfYearBal[k];
+                            curLtcgDraw += bestDraws[k] * (1 - bR);
+                        }
+                    });
+
+                    // Update Status
                     const fMAGI = floorTaxable + curOrdDraw + curLtcgDraw + curCollectiblesDraw;
                     status = (age >= 65 ? 'Medicare' : (fMAGI/fpl100 <= 1.38 ? 'Platinum' : 'Silver'));
-                    traceLog.push(`Final Cycle: MAGI ${math.toCurrency(fMAGI)} (${Math.round(fMAGI/fpl100*100)}% FPL). SNAP: ${math.toCurrency(snap)}/yr.`);
+                    
+                    // Log the Optimization Result
+                    let pass1Names = magiFillAssets.filter(a => bestDraws[a.key] > 0).map(a => a.label);
+                    if (pass1Names.length) traceLog.push(`Optimizer Pass 1 (MAGI Fill): Drew from ${pass1Names.join(', ')} to hit ${math.toCurrency(fMAGI)} MAGI.`);
+                    
+                    let pass2Names = assets.filter(a => a.density === 0 && bestDraws[a.key] > 0).map(a => a.label);
+                    if (pass2Names.length) traceLog.push(`Optimizer Pass 2 (Budget Fill): Bridged deficit using ${pass2Names.join(', ')}.`);
 
                 } else {
-                    // --- STANDARD IRON FIST LOGIC (Unchanged) ---
+                    // --- STANDARD IRON FIST LOGIC (Unchanged but Scope Fixed) ---
+                    let curOrdDraw = 0, curLtcgDraw = 0, curCollectiblesDraw = 0;
+
                     for (let iter = 0; iter < 15; iter++) {
                         bal = { ...startOfYearBal }; drawMap = {}; preTaxDraw = 0;
-                        let curOrdDraw = 0, curLtcgDraw = 0, curCollectiblesDraw = 0;
+                        curOrdDraw = 0; curLtcgDraw = 0; curCollectiblesDraw = 0;
 
                         const solveWaterfall = (pList, loggable = false) => {
                             for (const pk of pList) {
@@ -831,8 +821,6 @@ export const burndown = {
                                 let bR = (['taxable', 'crypto', 'metals'].includes(pk) && bal[pk] > 0) ? bal[pk+'Basis'] / bal[pk] : 1;
                                 let currentDrag = Math.min(0.85, Math.max(0, observedFriction));
                                 
-                                // Enhanced Tax logic for drag calculation:
-                                // If Metals, effective rate is ~28% (plus state). If LTCG, ~15% (plus state).
                                 let taxRate = 0;
                                 if (pk === 'metals') taxRate = 0.28;
                                 else if (['taxable', 'crypto'].includes(pk)) taxRate = 0.15;
@@ -849,7 +837,6 @@ export const burndown = {
                                     if (['taxable', 'crypto', 'metals'].includes(pk)) {
                                         const eff = (1 - ((1 - bR) * (taxRate + (stateTaxRates[assumptions.state]?.rate || 0)))) * 100;
                                         msg += ` (Tax Efficiency: ${Math.round(eff)}%)`;
-                                        if (pk === 'metals') msg += ` [Collectibles Rate]`;
                                     }
                                     if (smartAdjustments[pk]) msg += ` (Smart Correction Applied)`;
                                     traceLog.push(msg);
@@ -897,6 +884,19 @@ export const burndown = {
             }
 
             const postTaxInc = (floorGross + preTaxDraw + snap) - taxes;
+            
+            // Reinvestment Logic for Surplus:
+            // If we drew significantly more than needed (common in Handout Hunter to hit MAGI targets with high basis),
+            // reinvest the difference back into the Brokerage (Taxable) account to preserve Net Worth.
+            if (postTaxInc > targetBudget + 100) { // $100 buffer
+                const surplus = postTaxInc - targetBudget;
+                if (surplus > 0) {
+                    bal['taxable'] += surplus;
+                    bal['taxableBasis'] += surplus; // Reinvested cash is 100% basis
+                    traceLog.push(`Surplus Income: ${math.toCurrency(surplus)} exceeds budget. Reinvested into Brokerage (100% Cost Basis).`);
+                }
+            }
+
             if (isRet && (targetBudget - postTaxInc) > (targetBudget * 0.02)) {
                 status = 'INSOLVENT';
                 if (firstInsolvencyAge === null) firstInsolvencyAge = age;
@@ -912,7 +912,7 @@ export const burndown = {
                 { name: 'Brokerage', value: bal['taxable'], color: assetColors['Taxable'] },
                 { name: 'Roth IRA', value: bal['roth-basis'] + bal['roth-earnings'], color: assetColors['Roth IRA'] },
                 { name: '401k/IRA', value: bal['401k'], color: assetColors['Pre-Tax (401k/IRA)'] },
-                { name: 'Bitcoin', value: bal['crypto'], color: assetColors['Crypto'] },
+                { name: 'Crypto', value: bal['crypto'], color: assetColors['Crypto'] },
                 { name: 'Metals', value: bal['metals'], color: assetColors['Metals'] },
                 { name: 'HSA', value: bal['hsa'], color: assetColors['HSA'] }
             ];
