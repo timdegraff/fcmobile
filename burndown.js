@@ -842,100 +842,80 @@ export const burndown = {
                     if (pass2Names.length) traceLog.push(`Optimizer Pass 2 (Budget Fill): Bridged deficit using ${pass2Names.join(', ')}.`);
 
                 } else {
-                    // --- STANDARD IRON FIST LOGIC (Revised for Surplus Elimination) ---
-                    let curOrdDraw = 0, curLtcgDraw = 0, curCollectiblesDraw = 0;
+                    // --- NEW SEQUENTIAL BINARY SEARCH IRON FIST ---
+                    // Spot-on decumulation: solves for each asset in priority order.
+                    let currentTaxes = engine.calculateTax(floorTaxable, 0, 0, filingStatus, assumptions.state, infFac);
+                    let currentSnap = engine.calculateSnapBenefit(floorTaxable / 12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
+                    let currentNet = floorGross + currentSnap - currentTaxes;
 
-                    for (let iter = 0; iter < 25; iter++) { // Increased max iterations for better convergence
-                        bal = { ...startOfYearBal }; drawMap = {}; preTaxDraw = 0;
-                        curOrdDraw = 0; curLtcgDraw = 0; curCollectiblesDraw = 0;
+                    drawMap = {};
+                    preTaxDraw = 0;
+                    let runningOrd = floorTaxable;
+                    let runningLtcg = 0;
+                    let runningColl = 0;
 
-                        const solveWaterfall = (pList, loggable = false) => {
-                            for (const pk of pList) {
-                                const currentNet = (floorGross + preTaxDraw + snap) - taxes;
-                                const gap = targetBudget - currentNet;
-                                if (gap <= 10) break; // Keep drawing until gap is tiny
-                                const av = (pk === 'cash' ? Math.max(0, bal[pk] - cashFloor) : (pk === 'heloc' ? Math.max(0, helocLimit - bal[pk]) : bal[pk]));
-                                if (av <= 1) continue;
+                    for (const pk of burndown.priorityOrder) {
+                        let deficit = targetBudget - currentNet;
+                        if (deficit <= 1) break; // Gap is filled
 
-                                let bR = (['taxable', 'crypto', 'metals'].includes(pk) && bal[pk] > 0) ? bal[pk+'Basis'] / bal[pk] : 1;
-                                let currentDrag = Math.min(0.85, Math.max(0, observedFriction));
-                                
-                                let taxRate = 0;
-                                if (pk === 'metals') taxRate = 0.28;
-                                else if (['taxable', 'crypto'].includes(pk)) taxRate = 0.15;
-                                
-                                let etr = burndown.assetMeta[pk].isTaxable ? (pk === '401k' ? currentDrag : (1 - bR) * (taxRate + (stateTaxRates[assumptions.state]?.rate || 0) + currentDrag)) : 0;
-                                
-                                let rawDrawNeeded = gap / (1 - Math.max(0, etr));
-                                let effectiveNeeded = rawDrawNeeded;
+                        const av = (pk === 'cash' ? Math.max(0, bal[pk] - cashFloor) : (pk === 'heloc' ? Math.max(0, helocLimit - bal[pk]) : bal[pk]));
+                        if (av <= 1) continue;
 
-                                if (smartAdjustments[pk]) {
-                                    effectiveNeeded -= smartAdjustments[pk];
-                                }
-                                
-                                // FORCE SOLVENCY: If Deficit exists (Gap > 50), preserve logic to ensure we draw enough.
-                                if (gap > 50 && effectiveNeeded < rawDrawNeeded) {
-                                    effectiveNeeded = rawDrawNeeded;
-                                }
-                                
-                                let draw = Math.min(av, Math.max(0, effectiveNeeded));
-                                
-                                if (iter === 24 && loggable) {
-                                    let msg = `Drawing ${math.toCurrency(draw)} from ${burndown.assetMeta[pk].label}.`;
-                                    if (['taxable', 'crypto', 'metals'].includes(pk)) {
-                                        const eff = (1 - ((1 - bR) * (taxRate + (stateTaxRates[assumptions.state]?.rate || 0)))) * 100;
-                                        msg += ` (Tax Efficiency: ${Math.round(eff)}%)`;
-                                    }
-                                    if (smartAdjustments[pk] && draw !== rawDrawNeeded) msg += ` (Smart Correction Applied)`;
-                                    traceLog.push(msg);
-                                }
-                                
-                                if (pk === 'heloc') bal['heloc'] += draw;
-                                else {
-                                    if (bal[pk+'Basis']) bal[pk+'Basis'] -= (bal[pk+'Basis'] * (draw / bal[pk]));
-                                    bal[pk] -= draw;
-                                }
-                                drawMap[pk] = (drawMap[pk] || 0) + draw; preTaxDraw += draw;
-                                
-                                // Bin the draws correctly for tax calc
-                                if (pk === '401k') curOrdDraw += draw;
-                                else if (pk === 'metals') curCollectiblesDraw += (draw * (1 - bR));
-                                else if (['taxable', 'crypto'].includes(pk)) curLtcgDraw += (draw * (1 - bR));
-                                
-                                if (draw < av && gap <= 10) break; 
+                        // Binary search for precise draw from THIS specific asset
+                        let low = 0, high = av, bestDraw = 0;
+                        const bR = (['taxable', 'crypto', 'metals'].includes(pk) && startOfYearBal[pk] > 0) ? startOfYearBal[pk+'Basis'] / startOfYearBal[pk] : 1;
+
+                        for (let j = 0; j < 15; j++) {
+                            let testDraw = (low + high) / 2;
+                            let testOrd = runningOrd + (pk === '401k' ? testDraw : 0);
+                            let testLtcg = runningLtcg + (['taxable', 'crypto'].includes(pk) ? testDraw * (1 - bR) : 0);
+                            let testColl = runningColl + (pk === 'metals' ? testDraw * (1 - bR) : 0);
+
+                            let testTaxes = engine.calculateTax(testOrd, testLtcg, testColl, filingStatus, assumptions.state, infFac);
+                            let testSnap = engine.calculateSnapBenefit(testOrd / 12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
+                            
+                            // Net Gain = Gross Draw - Tax Impact + Aid Impact
+                            let netGain = testDraw - (testTaxes - currentTaxes) + (testSnap - currentSnap);
+                            
+                            if (netGain < deficit) {
+                                bestDraw = testDraw;
+                                low = testDraw;
+                            } else {
+                                high = testDraw;
                             }
-                        };
-
-                        solveWaterfall(burndown.priorityOrder, iter === 24);
-                        
-                        taxes = engine.calculateTax(floorTaxable + curOrdDraw, curLtcgDraw, curCollectiblesDraw, filingStatus, assumptions.state, infFac);
-                        snap = engine.calculateSnapBenefit((floorTaxable + curOrdDraw) / 12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
-
-                        const iterPostTax = (floorGross + preTaxDraw + snap) - taxes;
-                        const surplus = iterPostTax - targetBudget;
-                        const iterError = Math.abs(surplus) / targetBudget;
-                        
-                        if (preTaxDraw > 100) observedFriction = Math.min(0.9, Math.max(0, 1 - ((iterPostTax - (floorGross - engine.calculateTax(floorTaxable, 0, 0, filingStatus, assumptions.state, infFac))) / preTaxDraw)));
-                        
-                        const drawnKeys = Object.keys(drawMap).filter(k => drawMap[k] > 0);
-                        const marginalKey = drawnKeys[drawnKeys.length - 1]; 
-                        
-                        if (marginalKey && iterError > 0.005) {
-                            // Aggressive dampening if surplus exists to prevent over-withdrawal
-                            let correctionFactor = 0.8;
-                            if (iter > 10) correctionFactor = 1.0;
-                            if (iter > 15) correctionFactor = 1.2; 
-                            
-                            // If Surplus > 0, we drew too much. Increase smartAdjustment (which reduces draw).
-                            // If Surplus < 0, we drew too little. smartAdjustment can be negative (increasing draw), handled here as well.
-                            // smartAdjustments acts as a penalty term. 
-                            
-                            const reduction = (surplus / (1 - observedFriction)) * correctionFactor;
-                            smartAdjustments[marginalKey] = (smartAdjustments[marginalKey] || 0) + reduction;
                         }
-                        if (iter >= 4 && iterError <= 0.005) break; 
+                        
+                        // Commit the draw
+                        bestDraw = high; 
+                        let finalOrd = runningOrd + (pk === '401k' ? bestDraw : 0);
+                        let finalLtcg = runningLtcg + (['taxable', 'crypto'].includes(pk) ? bestDraw * (1 - bR) : 0);
+                        let finalColl = runningColl + (pk === 'metals' ? bestDraw * (1 - bR) : 0);
+                        
+                        let finalTaxes = engine.calculateTax(finalOrd, finalLtcg, finalColl, filingStatus, assumptions.state, infFac);
+                        let finalSnap = engine.calculateSnapBenefit(finalOrd / 12, 0, 0, totalHhSize, (benefits.shelterCosts || 700) * infFac, true, false, 0, 0, 0, assumptions.state, infFac, true) * 12;
+
+                        traceLog.push(`Iron Fist: Drew ${math.toCurrency(bestDraw)} from ${burndown.assetMeta[pk].label} to cover deficit.`);
+
+                        drawMap[pk] = bestDraw;
+                        preTaxDraw += bestDraw;
+                        runningOrd = finalOrd;
+                        runningLtcg = finalLtcg;
+                        runningColl = finalColl;
+                        currentTaxes = finalTaxes;
+                        currentSnap = finalSnap;
+                        currentNet = floorGross + preTaxDraw + currentSnap - currentTaxes;
+
+                        if (pk === 'heloc') bal['heloc'] += bestDraw;
+                        else {
+                            if (bal[pk+'Basis']) bal[pk+'Basis'] -= (bal[pk+'Basis'] * (bestDraw / bal[pk]));
+                            bal[pk] -= bestDraw;
+                        }
                     }
-                    const fMAGI = floorTaxable + (drawMap['401k'] || 0) + curLtcgDraw + curCollectiblesDraw;
+                    taxes = currentTaxes;
+                    snap = currentSnap;
+                    
+                    // Status Update
+                    const fMAGI = runningOrd + runningLtcg + runningColl;
                     status = (age >= 65 ? 'Medicare' : (fMAGI/fpl100 <= 1.38 ? 'Platinum' : 'Silver'));
                     traceLog.push(`Final Cycle MAGI: ${math.toCurrency(fMAGI)} (${status}).`);
                 }
