@@ -334,7 +334,7 @@ export const burndown = {
         const filingStatus = data.assumptions?.filingStatus || 'Single';
         const adults = filingStatus === 'Married Filing Jointly' ? 2 : 1;
         const currentYear = new Date().getFullYear();
-        const effectiveKidsCount = (ben.dependents || []).filter(d => (d.birthYear + 19) >= year).length;
+        const effectiveKidsCount = (ben.dependents || []).filter(d => (d.birthYear + 19) >= currentYear).length;
         const totalSize = adults + effectiveKidsCount;
         
         const maxSnapPossible = engine.calculateSnapBenefit(0, 0, 0, totalSize, ben.shelterCosts || 700, ben.hasSUA ?? true, ben.isDisabled ?? false, ben.childSupportPaid || 0, ben.depCare || 0, ben.medicalExps || 0, data.assumptions?.state || 'Michigan', 1, true);
